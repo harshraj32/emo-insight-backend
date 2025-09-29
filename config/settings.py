@@ -20,7 +20,7 @@ for d in (STORAGE_DIR, CLIPS_DIR, TRANSCRIPTS_DIR, HISTORY_DIR):
 RECALL_API_KEY = os.getenv("RECALL_API_KEY")
 RECALL_REGION = os.getenv("RECALL_REGION")  # adjust to your region slug or base subdomain
 RECALL_WEBHOOK_SECRET = os.getenv("RECALL_WEBHOOK_SECRET")  # optional, if Recall signs webhooks
-
+PORT = int(os.getenv("PORT"))
 HUME_API_KEY = os.getenv("HUME_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 

@@ -10,7 +10,7 @@ from fastapi_socketio import SocketManager
 from config import settings
 from recall import bot_manager
 from hume.hume_client import process_clip  # imported to keep parity with your earlier file refs
-from hume.summarize import summarize
+from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
 from recall.ws_receiver import start as recall_stream_start
 import event_bus

@@ -2,7 +2,7 @@ import os, json
 from openai import OpenAI
 
 # Init client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(api_key=os.getenv("CHATGPT_API_KEY"))
 
 # ---------------- Affina System Prompt ----------------
 AFFINA_PROMPT = """
@@ -103,7 +103,7 @@ def coach_feedback(context: dict, transcript_line: str) -> dict:
     """
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": AFFINA_PROMPT},
             {"role": "user", "content": user_prompt},

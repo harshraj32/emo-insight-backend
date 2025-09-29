@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import websockets
 from config import settings
 from hume import hume_client
-from hume.summarize import summarize
+from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
 import event_bus
 
