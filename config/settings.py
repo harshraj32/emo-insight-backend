@@ -23,7 +23,7 @@ RECALL_WEBHOOK_SECRET = os.getenv("RECALL_WEBHOOK_SECRET")  # optional, if Recal
 PORT = int(os.getenv("PORT"))
 HUME_API_KEY = os.getenv("HUME_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
+BACKEND_URL = os.getenv("BACKEND_URL")
 # Frontend origins
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "https://emo-insight-frontend.example")
 ELECTRON_ORIGIN = os.getenv("ELECTRON_ORIGIN", "http://localhost")
