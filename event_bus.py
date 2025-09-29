@@ -1,9 +1,9 @@
-from typing import Callable, Dict, Any
+from typing import Awaitable, Callable, Dict, Any
 
 # UI emitters (wired in main.py at startup)
-emit_advice: Callable[[str, str], None] = lambda *_: None
-emit_emotion: Callable[[Dict[str, Any]], None] = lambda *_: None
-emit_log: Callable[[str, list], None] = lambda *_: None
+emit_advice: Callable[[str, str], Awaitable[None]] = lambda *_: None  # async
+emit_emotion: Callable[[Dict[str, Any]], Awaitable[None]] = lambda *_: None  # async
+emit_log: Callable[[str, list], Awaitable[None]] = lambda *_: None  # async
 
 # Shared in-memory sessions store
 # sessions[session_id] = {

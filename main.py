@@ -52,15 +52,15 @@ async def log_requests(request, call_next):
 sessions: Dict[str, Dict[str, Any]] = event_bus.sessions
 
 # ===== Wire event bus emitters to Socket.IO =====
-def _emit_advice(session_id: str, advice: str):
-    socket_manager.emit("affina_advice", {"session_id": session_id, "advice": advice}, room=session_id)
+async def _emit_advice(session_id: str, advice: str):
+    await socket_manager.emit("affina_advice", {"session_id": session_id, "advice": advice}, room=session_id)
 
-def _emit_emotion(payload: Dict[str, Any]):
+async def _emit_emotion(payload: Dict[str, Any]):
     sid = payload.get("session_id")
-    socket_manager.emit("emotion_detected", payload, room=sid or None)
+    await socket_manager.emit("emotion_detected", payload, room=sid or None)
 
-def _emit_log(session_id: str, logs: list):
-    socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+async def _emit_log(session_id: str, logs: list):
+    await socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
 
 event_bus.emit_advice = _emit_advice
 event_bus.emit_emotion = _emit_emotion
@@ -73,25 +73,21 @@ async def join_session(sid, data):
     if session_id in sessions:
         await socket_manager.enter_room(sid, session_id)
         logs = sessions[session_id].get("logs", [])[-10:]
-        socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+        await socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
         logger.info(f"🔗 Client {sid} joined session {session_id}")
     else:
         logger.warning(f"⚠️ join_session: Unknown session {session_id}")
 
-# Example: Relay Recall events into Socket.IO
 @socket_manager.on("recall_event")
 async def recall_event(sid, data):
-    """
-    Recall.ai should POST/emit its media + transcript events here.
-    For now we just log + forward to the session room.
-    """
+    """Relay Recall.ai events to logs."""
     session_id = (data or {}).get("session_id")
     if not session_id or session_id not in sessions:
         logger.warning(f"⚠️ recall_event: Unknown session {session_id}")
         return
 
     sessions[session_id]["logs"].append(f"Recall event: {data.get('event')}")
-    event_bus.emit_log(session_id, sessions[session_id]["logs"][-10:])
+    await event_bus.emit_log(session_id, sessions[session_id]["logs"][-10:])
     logger.debug(f"📡 Recall event for {session_id}: {data.get('event')}")
 
 # ===== API Routes =====
@@ -109,7 +105,7 @@ def health():
     }
 
 @app.post("/api/start-session")
-def start_session(payload: Dict[str, Any] = Body(...)):
+async def start_session(payload: Dict[str, Any] = Body(...)):
     user_name = (payload.get("user_name") or "").strip()
     meeting_url = (payload.get("meeting_url") or "").strip()
     meeting_objective = (payload.get("meeting_objective") or "").strip()
@@ -137,17 +133,18 @@ def start_session(payload: Dict[str, Any] = Body(...)):
         bot_id = bot_manager.start_bot(meeting_url, session_id)
         sessions[session_id]["bot_id"] = bot_id
         sessions[session_id]["logs"].append(f"Session {session_id} created. Bot {bot_id} joining...")
-        event_bus.emit_log(session_id, sessions[session_id]["logs"][-10:])
+        await event_bus.emit_log(session_id, sessions[session_id]["logs"][-10:])
         logger.info(f"🤖 Started Recall bot {bot_id} for session {session_id}")
     except Exception as e:
         sessions[session_id]["logs"].append(f"Bot start error: {e}")
+        await event_bus.emit_log(session_id, sessions[session_id]["logs"][-10:])
         logger.exception("Bot start error")
         return {"success": False, "error": f"Failed to start bot: {e}"}
 
     return {"success": True, "session_id": session_id, "bot_id": bot_id}
 
 @app.post("/api/stop-session")
-def stop_session(payload: Dict[str, Any] = Body(...)):
+async def stop_session(payload: Dict[str, Any] = Body(...)):
     session_id = payload.get("session_id")
     sess = sessions.get(session_id)
     if not sess:
@@ -164,7 +161,7 @@ def stop_session(payload: Dict[str, Any] = Body(...)):
         logger.exception("Bot stop error")
     finally:
         sess["logs"].append("Session stopped by user.")
-        event_bus.emit_log(session_id, sess["logs"][-10:])
+        await event_bus.emit_log(session_id, sess["logs"][-10:])
         sessions.pop(session_id, None)
 
     return {"success": True, "message": "Session stopped"}

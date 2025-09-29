@@ -35,7 +35,7 @@ participant_data = defaultdict(
 )
 
 
-def create_clips_for_all(session_id, participants, start, end):
+async def create_clips_for_all(session_id, participants, start, end):
     """
     For a given 5s window, generate a clip for each speaker,
     send to Hume, summarize, and then generate one Affina feedback.
@@ -121,12 +121,12 @@ def create_clips_for_all(session_id, participants, start, end):
 
     # stringify if dict (frontend shows string)
     advice_str = json.dumps(feedback) if isinstance(feedback, dict) else str(feedback)
-    event_bus.emit_advice(session_id, advice_str)
+    await event_bus.emit_advice(session_id, advice_str)
 
     # log
     logs = sess.setdefault("logs", [])
     logs.append(f"[{ts_str}] Processed multi-speaker window.")
-    event_bus.emit_log(session_id, logs[-10:])
+    await event_bus.emit_log(session_id, logs[-10:])
 
 
 def check_clips(session_id):
@@ -193,7 +193,7 @@ async def fastapi_handler(websocket: WebSocket):
                 logs = sess.setdefault("logs", [])
                 text = payload.get("text") or payload.get("partial") or ""
                 logs.append(f"[{int(ts_now)}] Transcript {speaker}: {text[:120]}")
-                event_bus.emit_log(session_id, logs[-10:])
+                await event_bus.emit_log(session_id, logs[-10:])
     except Exception as e:
         print(f"⚠️ WebSocket error: {e}")
     finally:
