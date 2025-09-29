@@ -2,7 +2,7 @@ import asyncio
 import time
 import uuid
 from typing import Dict, Any
-
+import logging
 from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_socketio import SocketManager
@@ -27,6 +27,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== Logging setup =====
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("emo-insight")
+
+app = FastAPI(title="SalesBuddy Backend", version="1.0.0")
+socket_manager = SocketManager(app, cors_allowed_origins="*")
+
+# ===== Middleware to log every HTTP request =====
+@app.middleware("http")
+async def log_requests(request, call_next):
+    logger.info(f"➡️ {request.method} {request.url}")
+    response = await call_next(request)
+    logger.info(f"⬅️ {request.method} {request.url} {response.status_code}")
+    return response
 
 
 # Single source of truth for sessions
