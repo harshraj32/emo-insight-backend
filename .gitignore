@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+emo-insight-backend/
+.env
+*.env
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# Build/Cache
+*.egg-info/
+dist/
+build/
