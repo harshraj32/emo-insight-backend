@@ -1,45 +1,145 @@
-from fastapi import FastAPI, BackgroundTasks
-from recall import bot_manager
-from hume import hume_client, summarize
-from affina.coach import coach_feedback
+import asyncio
+import time
+import uuid
+from typing import Dict, Any
+
+from fastapi import FastAPI, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi_socketio import SocketManager
+
 from config import settings
-from pathlib import Path
-import glob, json, os
+from recall import bot_manager
+from hume.hume_client import process_clip  # imported to keep parity with your earlier file refs
+from hume.summarize import summarize
+from affina.coach import coach_feedback
+from recall.ws_receiver import start as recall_stream_start
+import event_bus
 
-app = FastAPI()
-bot_id = None
+app = FastAPI(title="SalesBuddy Backend", version="1.0.0")
+socket_manager = SocketManager(app, cors_allowed_origins="*")
 
-@app.post("/start")
-def start():
-    global bot_id
-    bot_id = bot_manager.start_bot()
-    return {"bot_id": bot_id}
+# ====== CORS ======
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ✅ allow everything
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.post("/stop")
-def stop():
-    global bot_id
-    if bot_id:
-        bot_manager.stop_bot(bot_id)
-        bot_id = None
-    return {"status": "stopped"}
 
-@app.post("/process_clips")
-def process_clips():
-    files = glob.glob(os.path.join(settings.CLIPS_DIR, "*.mp4"))
-    out = {}
-    for f in files:
-        res = hume_client.process_clip(Path(f))
-        summ = summarize.summarize(res)
-        out[os.path.basename(f)] = summ
-    return out
+# Single source of truth for sessions
+sessions: Dict[str, Dict[str, Any]] = event_bus.sessions
 
-@app.post("/feedback")
-def feedback(transcript_line: str):
-    # Dummy: take last summary file
-    files = glob.glob(os.path.join(settings.CLIPS_DIR, "*.mp4"))
-    if not files:
-        return {"error": "No clips"}
-    res = hume_client.process_clip(Path(files[-1]))
-    summ = summarize.summarize(res)
-    fb = coach_feedback(summ, transcript_line)
-    return {"feedback": fb, "summary": summ}
+# ====== Wire event bus emitters to Socket.IO events ======
+def _emit_advice(session_id: str, advice: str):
+    # target the session room so only the right client gets it
+    socket_manager.emit("affina_advice", {"session_id": session_id, "advice": advice}, room=session_id)
+
+def _emit_emotion(payload: Dict[str, Any]):
+    sid = payload.get("session_id")
+    socket_manager.emit("emotion_detected", payload, room=sid or None)
+
+def _emit_log(session_id: str, logs: list):
+    socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+
+event_bus.emit_advice = _emit_advice
+event_bus.emit_emotion = _emit_emotion
+event_bus.emit_log = _emit_log
+
+# ====== Socket.IO room join (frontend emits 'join_session') ======
+@socket_manager.on("join_session")
+async def join_session(sid, data):
+    session_id = (data or {}).get("session_id")
+    if session_id in sessions:
+        await socket_manager.enter_room(sid, session_id)
+        # push latest logs so UI shows history after joining
+        logs = sessions[session_id].get("logs", [])[-10:]
+        socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+        print(f"Client {sid} joined session {session_id}")
+
+# ====== API ======
+@app.get("/api/health")
+def health():
+    return {
+        "status": "ok",
+        "time": time.time(),
+        "version": app.version,
+        "services": {
+            "recall_webhooks_enabled": bool(settings.RECALL_API_KEY),
+            "hume_key_present": bool(settings.HUME_API_KEY),
+            "openai_key_present": bool(settings.OPENAI_API_KEY),
+        }
+    }
+
+@app.post("/api/start-session")
+def start_session(payload: Dict[str, Any] = Body(...)):
+    """
+    Body from frontend (unchanged):
+      - user_name
+      - meeting_url
+      - meeting_objective
+      - selected_emotions
+    """
+    user_name = (payload.get("user_name") or "").strip()
+    meeting_url = (payload.get("meeting_url") or "").strip()
+    meeting_objective = (payload.get("meeting_objective") or "").strip()
+    selected_emotions = payload.get("selected_emotions", [])
+
+    if not user_name or not meeting_url:
+        return {"success": False, "error": "user_name and meeting_url required"}
+
+    session_id = str(uuid.uuid4())
+
+    # Create session record
+    sessions[session_id] = {
+        "user_name": user_name,
+        "meeting_url": meeting_url,
+        "objective": meeting_objective,
+        "emotions": selected_emotions,
+        "bot_id": None,
+        "created_at": time.time(),
+        "phase": "pleasantries",
+        "logs": [],
+        "recent_events": [],
+        "last_hume_summary": {},
+    }
+
+    # Start Recall bot with session_id embedded in its WS URL
+    try:
+        bot_id = bot_manager.start_bot(meeting_url, session_id)
+        sessions[session_id]["bot_id"] = bot_id
+        sessions[session_id]["logs"].append(f"Session {session_id} created. Bot {bot_id} joining...")
+        event_bus.emit_log(session_id, sessions[session_id]["logs"][-10:])
+    except Exception as e:
+        sessions[session_id]["logs"].append(f"Bot start error: {e}")
+        return {"success": False, "error": f"Failed to start bot: {e}"}
+
+    return {"success": True, "session_id": session_id, "bot_id": bot_id}
+
+@app.post("/api/stop-session")
+def stop_session(payload: Dict[str, Any] = Body(...)):
+    session_id = payload.get("session_id")
+    sess = sessions.get(session_id)
+    if not sess:
+        return {"success": False, "error": "invalid session_id"}
+
+    try:
+        if sess.get("bot_id"):
+            bot_id = sess["bot_id"]
+            bot_manager.stop_bot(bot_id)
+            sess["logs"].append(f"Bot {bot_id} stopped.")
+    except Exception as e:
+        sess["logs"].append(f"Bot stop error: {e}")
+    finally:
+        sess["logs"].append("Session stopped by user.")
+        event_bus.emit_log(session_id, sess["logs"][-10:])
+        sessions.pop(session_id, None)
+
+    return {"success": True, "message": "Session stopped"}
+
+# ====== Startup background tasks ======
+@app.on_event("startup")
+async def startup_bg():
+    # Start the Recall websocket receiver server (Recall connects to it)
+    asyncio.create_task(recall_stream_start())
