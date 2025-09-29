@@ -13,7 +13,7 @@ from recall import bot_manager
 from hume.hume_client import process_clip  # imported to keep parity with your earlier file refs
 from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
-from recall.ws_receiver import start as recall_stream_start
+
 import event_bus
 
 app = FastAPI(title="SalesBuddy Backend", version="1.0.0")
@@ -138,13 +138,6 @@ def stop_session(payload: Dict[str, Any] = Body(...)):
         sessions.pop(session_id, None)
 
     return {"success": True, "message": "Session stopped"}
-
-# ====== Startup background tasks ======
-@app.on_event("startup")
-async def startup_bg():
-    # Start the Recall websocket receiver server (Recall connects to it)
-    asyncio.create_task(recall_stream_start())
-
 
 
 @app.websocket("/ws")
