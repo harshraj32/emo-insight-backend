@@ -6,7 +6,8 @@ from typing import Dict, Any
 from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_socketio import SocketManager
-
+from recall import ws_receiver
+from fastapi import WebSocket
 from config import settings
 from recall import bot_manager
 from hume.hume_client import process_clip  # imported to keep parity with your earlier file refs
@@ -143,3 +144,9 @@ def stop_session(payload: Dict[str, Any] = Body(...)):
 async def startup_bg():
     # Start the Recall websocket receiver server (Recall connects to it)
     asyncio.create_task(recall_stream_start())
+
+
+
+@app.websocket("/ws")
+async def recall_ws(websocket: WebSocket):
+    await ws_receiver.fastapi_handler(websocket)

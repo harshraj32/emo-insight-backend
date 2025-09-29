@@ -8,9 +8,8 @@ import time
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
 
-import websockets
+from fastapi import WebSocket
 from config import settings
 from hume import hume_client
 from hume.hume_summarize import summarize
@@ -154,20 +153,17 @@ def check_clips(session_id):
         loop.run_in_executor(executor, create_clips_for_all, session_id, sess_participants, start, end)
 
 
-async def handler(ws, path):
-    # Parse session_id from query string
-    try:
-        q = parse_qs(urlparse(path).query)
-        session_id = (q.get("session_id") or [None])[0]
-    except Exception:
-        session_id = None
+# 🔹 FastAPI WebSocket handler (instead of websockets.serve)
+async def fastapi_handler(websocket: WebSocket):
+    await websocket.accept()
+    session_id = websocket.query_params.get("session_id")
 
     if not session_id or session_id not in event_bus.sessions:
         print("⚠️ ws_receiver: missing/unknown session_id. Closing.")
-        await ws.close()
+        await websocket.close()
         return
 
-    print(f"✅ Recall connected for session {session_id}: {ws.remote_address}")
+    print(f"✅ Recall connected for session {session_id}")
 
     async def clip_timer():
         while True:
@@ -176,10 +172,10 @@ async def handler(ws, path):
 
     clip_task = asyncio.create_task(clip_timer())
     try:
-        async for msg in ws:
-            event = json.loads(msg)
-            evt_type = event.get("event")
-            payload = (event.get("data") or {}).get("data") or {}
+        while True:
+            msg = await websocket.receive_json()
+            evt_type = msg.get("event")
+            payload = (msg.get("data") or {}).get("data") or {}
             speaker = payload.get("participant", {}).get("name") or "unknown"
             ts_now = time.time()
 
@@ -198,16 +194,8 @@ async def handler(ws, path):
                 text = payload.get("text") or payload.get("partial") or ""
                 logs.append(f"[{int(ts_now)}] Transcript {speaker}: {text[:120]}")
                 event_bus.emit_log(session_id, logs[-10:])
+    except Exception as e:
+        print(f"⚠️ WebSocket error: {e}")
     finally:
         clip_task.cancel()
-
-
-async def start():
-    port = settings.PORT
-    async with websockets.serve(handler, "0.0.0.0", port, ping_interval=None):
-        print(f"🚀 WS receiver on ws://0.0.0.0:{port}/ws?session_id=...")
-        await asyncio.Future()
-
-
-if __name__ == "__main__":
-    asyncio.run(start())
+        await websocket.close()
