@@ -305,6 +305,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             "session_id": session_id,
             "advice": advice_payload
         })
+        print("Emitting advice:", advice_payload)
         # Update logs
         sess["logs"].append(f"[{ts_str}] Processed {len(summaries)} speakers")
         sess["last_hume_summary"] = summaries
