@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from openai import OpenAI
 
 # Init client - Fixed env variable name
@@ -71,6 +72,7 @@ Always output in JSON with:
 - "top_emotion" → strongest emotion detected (after weighting)  
 - "recommendation" → 1–2 sentence actionable coaching advice  
 
+IMPORTANT: Output ONLY valid JSON, no markdown code blocks, no extra text.
 """
 
 # ---------------- Function ----------------
@@ -85,6 +87,26 @@ def coach_feedback(context: dict, transcript_line: str) -> dict:
       - emotions: list[str] (emotions to track)
       - summaries: dict { "rep": {...}, "customer1": {...}, ... }
     """
+
+    # Check if we have any valid emotion data
+    has_valid_data = False
+    for speaker, summary in context.get("summaries", {}).items():
+        audio_emotions = summary.get("audio", {}).get("top_emotions")
+        video_emotions = summary.get("video", {}).get("top_emotions")
+        if audio_emotions or video_emotions:
+            has_valid_data = True
+            break
+    
+    # If no valid data, return a default response
+    if not has_valid_data:
+        return {
+            "stage": context.get("phase", "Pleasantries").title(),
+            "speaker": "System",
+            "transcript_snippet": transcript_line[:100] if transcript_line else "No transcript",
+            "dominant_channel": "none",
+            "top_emotion": "No data",
+            "recommendation": "Waiting for emotion data. Make sure the bot is in the meeting and participants have their cameras/mics on."
+        }
 
     user_prompt = f"""
     Here is the latest Hume analysis (multi-speaker) and transcript snippet.
@@ -101,6 +123,7 @@ def coach_feedback(context: dict, transcript_line: str) -> dict:
     "{transcript_line}"
 
     Provide coaching feedback in JSON only, using the format defined above.
+    Output ONLY the JSON object, no markdown code blocks, no extra text.
     """
 
     try:
@@ -114,11 +137,55 @@ def coach_feedback(context: dict, transcript_line: str) -> dict:
             max_tokens=300,
         )
 
-        content = response.choices[0].message.content
-
+        content = response.choices[0].message.content.strip()
+        
+        # Clean up the response - remove markdown code blocks if present
+        if "```json" in content:
+            # Extract JSON from markdown code block
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+            if json_match:
+                content = json_match.group(1)
+        elif "```" in content:
+            # Remove any other code blocks
+            content = re.sub(r'```.*?```', '', content, flags=re.DOTALL).strip()
+        
+        # Try to parse the JSON
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {"raw_output": content}
+            result = json.loads(content)
+            # Ensure we have the required fields
+            if "recommendation" not in result:
+                result["recommendation"] = "Keep engaging with your audience."
+            return result
+        except json.JSONDecodeError as e:
+            print(f"[DEBUG] Failed to parse coach JSON: {e}")
+            print(f"[DEBUG] Raw content: {content[:500]}")
+            
+            # Try to extract just the recommendation if JSON parsing fails
+            if "recommendation" in content:
+                match = re.search(r'"recommendation"\s*:\s*"([^"]*)"', content)
+                if match:
+                    return {
+                        "recommendation": match.group(1),
+                        "stage": context.get("phase", "Unknown"),
+                        "speaker": "Unknown",
+                        "transcript_snippet": transcript_line[:100] if transcript_line else "",
+                        "dominant_channel": "unknown",
+                        "top_emotion": "Processing"
+                    }
+            
+            # Fallback response
+            return {
+                "recommendation": "Keep the conversation flowing naturally.",
+                "stage": context.get("phase", "Unknown"),
+                "speaker": "Rep",
+                "transcript_snippet": transcript_line[:100] if transcript_line else "",
+                "dominant_channel": "unknown",
+                "top_emotion": "Processing"
+            }
+            
     except Exception as e:
-        return {"error": str(e), "recommendation": "Coach temporarily unavailable"}
+        print(f"[DEBUG] Coach error: {e}")
+        return {
+            "recommendation": "Stay focused on your meeting objective.",
+            "error": str(e)
+        }
