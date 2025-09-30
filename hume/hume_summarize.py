@@ -1,22 +1,24 @@
 # hume/hume_summarize.py
+from typing import Dict, Any, List
 
 def summarize(results: dict) -> dict:
     """
-    Summarize Hume API results to extract top emotions and transcript text
-    from audio (prosody) and top emotions from video (face).
+    Summarize Hume API results:
+    - Audio (prosody): transcript + top emotions
+    - Video (face): top emotions
     """
     summary = {"audio": {}, "video": {}}
 
     try:
-        # Normalize results structure
-        if isinstance(results, list) and len(results) > 0:
+        # Normalize results
+        if isinstance(results, list) and results:
             result = results[0]
         elif isinstance(results, dict):
             result = results
         else:
-            raise ValueError(f"Unexpected results format: {type(results)}")
+            return summary
 
-        # Find predictions
+        # Predictions live here
         if "results" in result:
             predictions = result["results"].get("predictions", [])
         elif "predictions" in result:
@@ -29,68 +31,63 @@ def summarize(results: dict) -> dict:
 
         models = predictions[0].get("models", {})
 
-        # ---- Prosody (Audio) ----
+        # ---------- AUDIO (Prosody) ----------
         if "prosody" in models:
             prosody = models["prosody"]
             grouped_preds = prosody.get("grouped_predictions", [])
 
-            if grouped_preds:
-                all_emotions = {}
-                transcripts = []
+            all_emotions: Dict[str, List[float]] = {}
+            transcripts: List[str] = []
 
-                for gp in grouped_preds:
-                    for pred in gp.get("predictions", []):
-                        # Collect transcript text if available
-                        text = pred.get("text")
-                        if text:
-                            transcripts.append(text)
+            for gp in grouped_preds:
+                for pred in gp.get("predictions", []):
+                    # Collect transcript text if present
+                    text = pred.get("text")
+                    if text:
+                        transcripts.append(text.strip())
 
-                        # Collect emotion scores
-                        for emo in pred.get("emotions", []):
-                            name, score = emo["name"], emo["score"]
+                    # Collect emotion scores
+                    for emo in pred.get("emotions", []):
+                        name = emo.get("name")
+                        score = emo.get("score")
+                        if name is not None and score is not None:
                             all_emotions.setdefault(name, []).append(score)
 
-                # Average scores
+            if all_emotions:
                 avg_emotions = {
                     name: sum(scores) / len(scores)
                     for name, scores in all_emotions.items()
                 }
-
-                # Top 3 emotions
-                top3 = sorted(
-                    avg_emotions.items(), key=lambda x: x[1], reverse=True
-                )[:3]
-
+                top3 = sorted(avg_emotions.items(), key=lambda x: x[1], reverse=True)[:3]
                 summary["audio"]["top_emotions"] = top3
-                if transcripts:
-                    summary["audio"]["transcript"] = " ".join(transcripts)
 
-        # ---- Face (Video) ----
+            if transcripts:
+                summary["audio"]["transcript"] = " ".join(transcripts)
+
+        # ---------- VIDEO (Face) ----------
         if "face" in models:
             face = models["face"]
             grouped_preds = face.get("grouped_predictions", [])
 
-            if grouped_preds:
-                all_emotions = {}
+            all_emotions: Dict[str, List[float]] = {}
 
-                for gp in grouped_preds:
-                    for pred in gp.get("predictions", []):
-                        for emo in pred.get("emotions", []):
-                            name, score = emo["name"], emo["score"]
+            for gp in grouped_preds:
+                for pred in gp.get("predictions", []):
+                    for emo in pred.get("emotions", []):
+                        name = emo.get("name")
+                        score = emo.get("score")
+                        if name is not None and score is not None:
                             all_emotions.setdefault(name, []).append(score)
 
+            if all_emotions:
                 avg_emotions = {
                     name: sum(scores) / len(scores)
                     for name, scores in all_emotions.items()
                 }
-
-                top3 = sorted(
-                    avg_emotions.items(), key=lambda x: x[1], reverse=True
-                )[:3]
-
+                top3 = sorted(avg_emotions.items(), key=lambda x: x[1], reverse=True)[:3]
                 summary["video"]["top_emotions"] = top3
 
     except Exception as e:
-        summary["error"] = str(e)
+        summary["error"] = f"summarize failed: {e}"
 
     return summary
