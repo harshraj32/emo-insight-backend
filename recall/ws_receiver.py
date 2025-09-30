@@ -158,6 +158,7 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
 
             summaries[clean_speaker] = summary[clean_speaker]
             print(f"🎉 Summary created for {clean_speaker}")
+            print(f"Summary: {summaries}")
         except Exception as e:
             summaries[clean_speaker] = {
                 "audio": {"status": "error", "error": str(e)},
