@@ -45,38 +45,6 @@ def root():
     return {"status": "running", "message": "Emo Insight Backend is alive!"}
 
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-
-RECALL_API_KEY = os.getenv("RECALL_API_KEY")
-RECALL_REGION = os.getenv("RECALL_REGION", "us-west-2")
-
-headers = {
-    "authorization": f"Token {RECALL_API_KEY}",
-    "content-type": "application/json"
-}
-
-r = requests.get(
-    f"https://{RECALL_REGION}.recall.ai/api/v1/bot",
-    headers=headers
-)
-
-bots = r.json()
-print(f"Found {len(bots)} bots")
-
-# Stop each bot
-for bot in bots:
-    bot_id = bot.get("id")
-    status = bot.get("status", {}).get("code")
-    if status in ["ready", "in_call", "in_waiting_room"]:
-        print(f"Stopping bot {bot_id} (status: {status})")
-        requests.post(
-            f"https://{RECALL_REGION}.recall.ai/api/v1/bot/{bot_id}/leave",
-            headers=headers
-        )
-
 # ===== Middleware: log every HTTP request =====
 @app.middleware("http")
 async def log_requests(request, call_next):
