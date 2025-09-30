@@ -261,10 +261,23 @@ async def process_affina_feedback(session_id, summaries, ts_str):
     try:
         sess = event_bus.sessions.get(session_id)
         if not sess:
-            print(f"⚠️ Session {session_id} not found for Affina processing")
-            return
+            print(f"⚠️ Session {session_id} not found - creating placeholder session")
+            # Create a minimal session to allow processing to continue
+            event_bus.sessions[session_id] = {
+                "user_name": "Unknown",
+                "meeting_url": "Unknown",
+                "objective": "No objective set",
+                "emotions": ["concentration", "confusion", "boredom"],
+                "bot_id": None,
+                "created_at": time.time(),
+                "phase": "pitch",
+                "logs": ["Session recovered from orphaned bot"],
+                "recent_events": [],
+                "last_hume_summary": {},
+            }
+            sess = event_bus.sessions[session_id]
         
-        # Prepare context for coach
+        # Now continue with normal processing
         context = {
             "phase": sess.get("phase", "pitch"),
             "objective": sess.get("objective", ""),
@@ -284,6 +297,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
                     "video": summary.get("video", {})
                 }
                 await event_bus.emit_emotion(emotion_data)
+                print(f"📊 Emitted emotion for {speaker}: {summary.get('audio', {}).get('top_emotions', [])[:1]}")
         
         # Get recent transcript for context
         recent_transcript = ""
@@ -302,6 +316,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             advice = str(feedback)
         
         await event_bus.emit_advice(session_id, advice)
+        print(f"💡 Affina advice: {advice[:100]}...")
         
         # Update logs
         sess["logs"].append(f"[{ts_str}] Processed {len(summaries)} speakers")
@@ -327,99 +342,25 @@ async def fastapi_handler(websocket: WebSocket):
         await websocket.close(code=1008, reason="Missing session_id")
         return
     
-    # Verify session exists
+    # Check if session exists, if not create a placeholder
     sess = event_bus.sessions.get(session_id)
     if not sess:
-        print(f"⚠️ Unknown session_id: {session_id}")
-        await websocket.close(code=1008, reason="Unknown session")
-        return
+        print(f"⚠️ Unknown session_id: {session_id}, creating placeholder")
+        event_bus.sessions[session_id] = {
+            "user_name": "Unknown",
+            "meeting_url": "Unknown", 
+            "objective": "Session recovered",
+            "emotions": ["concentration", "confusion", "boredom"],
+            "bot_id": None,
+            "created_at": time.time(),
+            "phase": "pitch",
+            "logs": [f"Bot connected with orphaned session {session_id}"],
+            "recent_events": [],
+            "last_hume_summary": {},
+        }
+        sess = event_bus.sessions[session_id]
     
     print(f"✅ Recall bot connected for session {session_id}")
     sess["logs"].append("Recall bot connected")
     await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
-    # Start clip processing timer
-    async def clip_timer():
-        while True:
-            await asyncio.sleep(1.0)
-            check_and_create_clips(session_id)
-    
-    clip_task = asyncio.create_task(clip_timer())
-    
-    try:
-        while True:
-            message = await websocket.receive_text()
-            
-            try:
-                msg = json.loads(message)
-            except json.JSONDecodeError:
-                continue
-            
-            evt_type = msg.get("event")
-            payload = (msg.get("data") or {}).get("data") or {}
-            participant = payload.get("participant", {})
-            speaker = participant.get("name") or f"ID-{participant.get('id')}"
-            ts_now = time.time()
-            
-            # Create unique key for this session+speaker
-            participant_key = f"{session_id}_{speaker}"
-            
-            # Handle different event types
-            if evt_type == "video_separate_png.data":
-                buf_b64 = payload.get("buffer")
-                if buf_b64:
-                    participant_data[participant_key]["frames"].append((buf_b64, ts_now))
-            
-            elif evt_type == "audio_separate_raw.data":
-                buf_b64 = payload.get("buffer")
-                rel_ts = payload.get("timestamp", {}).get("relative")
-                
-                if buf_b64:
-                    pcm_bytes = base64.b64decode(buf_b64)
-                    data = participant_data[participant_key]
-                    
-                    # Handle audio gaps
-                    if rel_ts is not None and data["last_audio_ts"] is not None:
-                        expected_samples = int((rel_ts - data["last_audio_ts"]) * AUDIO_RATE)
-                        actual_samples = len(pcm_bytes) // SAMPLE_WIDTH
-                        gap_samples = expected_samples - actual_samples
-                        
-                        if gap_samples > 0:
-                            # Insert silence for gaps
-                            silence = b"\x00" * (gap_samples * SAMPLE_WIDTH)
-                            data["audio_buffer"].extend(silence)
-                    
-                    data["audio_buffer"].extend(pcm_bytes)
-                    if rel_ts is not None:
-                        data["last_audio_ts"] = rel_ts
-            
-            elif evt_type in ["transcript.data", "transcript.partial_data"]:
-                words = [w.get("text", "") for w in payload.get("words", [])]
-                text = " ".join(words).strip()
-                
-                if text:
-                    is_partial = evt_type == "transcript.partial_data"
-                    log_entry = f"Transcript {speaker}{'(partial)' if is_partial else ''}: {text[:150]}"
-                    sess["logs"].append(log_entry)
-                    
-                    # Only emit non-partial transcripts
-                    if not is_partial:
-                        print(f"📝 {speaker}: {text}")
-                        await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
-    except Exception as e:
-        print(f"❌ WebSocket error: {e}")
-        sess["logs"].append(f"WebSocket error: {str(e)}")
-        await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
-    finally:
-        clip_task.cancel()
-        
-        # Cleanup participant data for this session
-        session_prefix = f"{session_id}_"
-        keys_to_remove = [k for k in participant_data.keys() if k.startswith(session_prefix)]
-        for key in keys_to_remove:
-            del participant_data[key]
-        
-        print(f"🔌 WebSocket disconnected for session {session_id}")
-        await websocket.close()
+ 
