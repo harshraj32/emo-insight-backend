@@ -10,26 +10,28 @@ def summarize(results: dict) -> dict:
     summary = {"audio": {}, "video": {}}
 
     try:
-        # Normalize results
+        # Handle the actual Hume response structure
         if isinstance(results, list) and results:
-            result = results[0]
-        elif isinstance(results, dict):
-            result = results
+            # Get the first result item
+            result_item = results[0]
+            
+            # Navigate to predictions
+            if "results" in result_item and "predictions" in result_item["results"]:
+                predictions = result_item["results"]["predictions"]
+            else:
+                return summary
         else:
             return summary
-
-        # Predictions live here
-        if "results" in result:
-            predictions = result["results"].get("predictions", [])
-        elif "predictions" in result:
-            predictions = result["predictions"]
-        else:
-            predictions = []
 
         if not predictions:
             return summary
 
-        models = predictions[0].get("models", {})
+        # Get the first prediction (there's usually only one per file)
+        if predictions and len(predictions) > 0:
+            prediction = predictions[0]
+            models = prediction.get("models", {})
+        else:
+            return summary
 
         # ---------- AUDIO (Prosody) ----------
         if "prosody" in models:
@@ -73,6 +75,7 @@ def summarize(results: dict) -> dict:
 
             for gp in grouped_preds:
                 for pred in gp.get("predictions", []):
+                    # For face model, emotions are directly in each prediction
                     for emo in pred.get("emotions", []):
                         name = emo.get("name")
                         score = emo.get("score")
@@ -89,5 +92,8 @@ def summarize(results: dict) -> dict:
 
     except Exception as e:
         summary["error"] = f"summarize failed: {e}"
+        print(f"[DEBUG] Summarize error: {e}")
+        import traceback
+        traceback.print_exc()
 
     return summary

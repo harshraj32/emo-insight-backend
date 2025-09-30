@@ -264,6 +264,11 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             print(f"⚠️ Session {session_id} not found for Affina processing")
             return
         
+        # Debug: Print what we're sending to Affina
+        print(f"\n[DEBUG] Sending to Affina:")
+        print(f"  Session: {session_id}")
+        print(f"  Summaries: {json.dumps(summaries, indent=2)}")
+        
         # Prepare context for coach
         context = {
             "phase": sess.get("phase", "pitch"),
@@ -272,49 +277,70 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             "summaries": summaries,
         }
         
-        # Emit emotion events
+        # Emit emotion events for each speaker
         for speaker, summary in summaries.items():
-            if summary.get("audio", {}).get("status") == "processed" or \
-               summary.get("video", {}).get("status") == "processed":
+            # Only emit if we have processed data
+            audio_data = summary.get("audio", {})
+            video_data = summary.get("video", {})
+            
+            if audio_data.get("status") == "processed" or video_data.get("status") == "processed":
                 emotion_data = {
                     "session_id": session_id,
                     "speaker": speaker,
                     "timestamp": ts_str,
-                    "audio": summary.get("audio", {}),
-                    "video": summary.get("video", {})
+                    "audio": audio_data,
+                    "video": video_data
                 }
+                print(f"[DEBUG] Emitting emotion for {speaker}: {emotion_data}")
                 await event_bus.emit_emotion(emotion_data)
         
         # Get recent transcript for context
         recent_transcript = ""
         for log in sess.get("logs", [])[-5:]:
             if "Transcript" in log and "partial" not in log:
-                recent_transcript = log.split("Transcript", 1)[1].strip()
-                break
+                # Extract the transcript text after "Transcript <speaker>:"
+                parts = log.split(":", 1)
+                if len(parts) > 1:
+                    recent_transcript = parts[1].strip()
+                    break
+        
+        print(f"[DEBUG] Recent transcript: {recent_transcript}")
         
         # Get coach feedback
         feedback = coach_feedback(context, recent_transcript or f"[No transcript at {ts_str}]")
         
-        # Emit advice
+        print(f"[DEBUG] Coach feedback received: {feedback}")
+        
+        # Emit advice - fix the structure here
         if isinstance(feedback, dict):
-            advice_payload = feedback
+            advice_message = feedback.get("recommendation", "Processing...")
         else:
-            advice_payload = {"recommendation": str(feedback)}
-
-        await event_bus.emit_advice(session_id, {
-            "session_id": session_id,
-            "advice": advice_payload
-        })
-        print("Emitting advice:", advice_payload)
-        # Update logs
+            advice_message = str(feedback)
+        
+        # Emit with correct structure
+        await event_bus.emit_advice(session_id, advice_message)
+        
+        print(f"[DEBUG] Emitted advice: {advice_message}")
+        
+        # Update session logs
         sess["logs"].append(f"[{ts_str}] Processed {len(summaries)} speakers")
         sess["last_hume_summary"] = summaries
+        
+        # Store the feedback in session for debugging
+        sess["last_coach_feedback"] = feedback
+        
         await event_bus.emit_log(session_id, sess["logs"][-10:])
         
     except Exception as e:
         print(f"❌ Error in Affina processing: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Try to emit an error message to frontend
+        try:
+            await event_bus.emit_advice(session_id, f"Coach temporarily unavailable: {str(e)}")
+        except:
+            pass
 
 async def fastapi_handler(websocket: WebSocket):
     """
