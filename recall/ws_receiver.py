@@ -15,6 +15,7 @@ from hume import hume_client
 from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
 import event_bus
+from hume.hume_summarize import load_hume_json_from_file, summarize_hume_batch
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -54,19 +55,22 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
 
     for speaker_name, data in participants_data.items():
         # Clean speaker name (remove any session prefix if accidentally included)
-        clean_speaker = speaker_name.replace(f"{session_id}_", "") if speaker_name.startswith(f"{session_id}_") else speaker_name
-        
+        clean_speaker = (
+            speaker_name.replace(f"{session_id}_", "")
+            if speaker_name.startswith(f"{session_id}_")
+            else speaker_name
+        )
+
         # Create unique clip names
         audio_clip_path = os.path.join(session_dir, f"{clean_speaker}_{ts_str}_audio.wav")
         video_clip_path = os.path.join(session_dir, f"{clean_speaker}_{ts_str}_video.mp4")
         temp_dir = os.path.join(session_dir, f"tmp_{clean_speaker}_{ts_str}")
-        
+
         os.makedirs(temp_dir, exist_ok=True)
 
         try:
-            # Initialize summaries for this speaker
-            audio_summary = {"status": "no_data"}
-            video_summary = {"status": "no_data"}
+            audio_results = None
+            video_results = None
 
             # Process audio if available
             if len(data["audio_buffer"]) > 0:
@@ -74,7 +78,6 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                 with open(raw_path, "wb") as f:
                     f.write(data["audio_buffer"])
 
-                # Convert raw PCM to WAV
                 try:
                     subprocess.run(
                         [
@@ -88,25 +91,21 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                         ],
                         check=True,
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
-                    
-                    # Process through Hume
+
                     if os.path.exists(audio_clip_path) and os.path.getsize(audio_clip_path) > 0:
                         audio_results = hume_client.process_clip(
-                            Path(audio_clip_path), 
-                            models={"prosody": {"granularity": "utterance"}}
+                            Path(audio_clip_path),
+                            models={"prosody": {"granularity": "utterance"}},
                         )
-                        audio_summary = safe_summary(summarize(audio_results))
-                        audio_summary["status"] = "processed"
                         print(f"✅ Audio processed for {clean_speaker}: {os.path.getsize(audio_clip_path)} bytes")
                     else:
-                        audio_summary = {"status": "error", "error": "Empty audio file"}
-                        
+                        print(f"⚠️ Empty audio file for {clean_speaker}")
                 except subprocess.CalledProcessError as e:
-                    audio_summary = {"status": "error", "error": f"FFmpeg failed: {e.stderr}"}
+                    print(f"❌ FFmpeg audio failed for {clean_speaker}: {e.stderr}")
                 except Exception as e:
-                    audio_summary = {"status": "error", "error": str(e)}
+                    print(f"❌ Audio processing error for {clean_speaker}: {e}")
 
             # Process video if frames available
             frame_count = 0
@@ -119,9 +118,8 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
 
             if frame_count > 0:
                 frame_pattern = os.path.join(temp_dir, "frame_%04d.png")
-                
+
                 try:
-                    # Create video from frames
                     subprocess.run(
                         [
                             "ffmpeg", "-y",
@@ -134,48 +132,45 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                         ],
                         check=True,
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
 
-                    # Process through Hume
                     if os.path.exists(video_clip_path) and os.path.getsize(video_clip_path) > 0:
                         video_results = hume_client.process_clip(
-                            Path(video_clip_path), 
-                            models={"face": {"fps_pred": 3}}
+                            Path(video_clip_path),
+                            models={"face": {"fps_pred": 3}},
                         )
-                        video_summary = safe_summary(summarize(video_results))
-                        video_summary["status"] = "processed"
                         print(f"✅ Video processed for {clean_speaker}: {frame_count} frames")
                     else:
-                        video_summary = {"status": "error", "error": "Empty video file"}
-                        
+                        print(f"⚠️ Empty video file for {clean_speaker}")
                 except subprocess.CalledProcessError as e:
-                    video_summary = {"status": "error", "error": f"FFmpeg failed: {e.stderr}"}
+                    print(f"❌ FFmpeg video failed for {clean_speaker}: {e.stderr}")
                 except Exception as e:
-                    video_summary = {"status": "error", "error": str(e)}
+                    print(f"❌ Video processing error for {clean_speaker}: {e}")
 
-            # Store summaries
-            summaries[clean_speaker] = {
-                "audio": audio_summary,
-                "video": video_summary,
-                "timestamp": ts_str
-            }
+            # 👉 NEW: build unified summary
+            summary = summarize_hume_batch(
+                audio_obj=audio_results,
+                video_obj=video_results,
+                participant=clean_speaker,
+                timestamp=ts_str,
+            )
 
+            summaries[clean_speaker] = summary[clean_speaker]
+            print(f"🎉 Summary created for {summaries}")
         except Exception as e:
             summaries[clean_speaker] = {
                 "audio": {"status": "error", "error": str(e)},
                 "video": {"status": "error", "error": str(e)},
-                "timestamp": ts_str
+                "timestamp": ts_str,
             }
             print(f"❌ Error processing {clean_speaker}: {e}")
 
         finally:
-            # Cleanup temp directory
             if os.path.exists(temp_dir):
                 subprocess.run(["rm", "-rf", temp_dir], capture_output=True)
 
     return summaries, ts_str
-
 def check_and_create_clips(session_id):
     """
     Check if it's time to create clips for participants in this session.
@@ -254,6 +249,7 @@ def check_and_create_clips(session_id):
         
         asyncio.create_task(process_results())
 
+
 async def process_affina_feedback(session_id, summaries, ts_str):
     """
     Send summaries to Affina coach and emit results.
@@ -263,12 +259,12 @@ async def process_affina_feedback(session_id, summaries, ts_str):
         if not sess:
             print(f"⚠️ Session {session_id} not found for Affina processing")
             return
-        
+
         # Debug: Print what we're sending to Affina
         print(f"\n[DEBUG] Sending to Affina:")
         print(f"  Session: {session_id}")
         print(f"  Summaries: {json.dumps(summaries, indent=2)}")
-        
+
         # Prepare context for coach
         context = {
             "phase": sess.get("phase", "pitch"),
@@ -276,67 +272,61 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             "emotions": sess.get("emotions", []),
             "summaries": summaries,
         }
-        
+
         # Emit emotion events for each speaker
         for speaker, summary in summaries.items():
-            # Only emit if we have processed data
             audio_data = summary.get("audio", {})
             video_data = summary.get("video", {})
-            
-            if audio_data.get("status") == "processed" or video_data.get("status") == "processed":
+
+            # ✅ Updated to check for "ok"
+            if audio_data.get("status") == "ok" or video_data.get("status") == "ok":
                 emotion_data = {
                     "session_id": session_id,
                     "speaker": speaker,
                     "timestamp": ts_str,
                     "audio": audio_data,
-                    "video": video_data
+                    "video": video_data,
                 }
                 print(f"[DEBUG] Emitting emotion for {speaker}: {emotion_data}")
                 await event_bus.emit_emotion(emotion_data)
-        
-        # Get recent transcript for context
+
+        # 👉 Get transcript from summaries, not logs
         recent_transcript = ""
-        for log in sess.get("logs", [])[-5:]:
-            if "Transcript" in log and "partial" not in log:
-                # Extract the transcript text after "Transcript <speaker>:"
-                parts = log.split(":", 1)
-                if len(parts) > 1:
-                    recent_transcript = parts[1].strip()
-                    break
-        
+        for speaker, summary in summaries.items():
+            transcript = summary.get("audio", {}).get("transcript")
+            if transcript:
+                recent_transcript = transcript
+                break  # just take the first available transcript
+
+        if not recent_transcript:
+            recent_transcript = f"[No transcript at {ts_str}]"
+
         print(f"[DEBUG] Recent transcript: {recent_transcript}")
-        
+
         # Get coach feedback
-        feedback = coach_feedback(context, recent_transcript or f"[No transcript at {ts_str}]")
-        
+        feedback = coach_feedback(context, recent_transcript)
         print(f"[DEBUG] Coach feedback received: {feedback}")
-        
-        # Emit advice - fix the structure here
+
+        # Emit advice
         if isinstance(feedback, dict):
-            advice_message = feedback.get("recommendation", "Processing...")
+            advice_message = feedback.get("recommendation", "Processing.")
         else:
             advice_message = str(feedback)
-        
-        # Emit with correct structure
+
         await event_bus.emit_advice(session_id, advice_message)
-        
         print(f"[DEBUG] Emitted advice: {advice_message}")
-        
+
         # Update session logs
         sess["logs"].append(f"[{ts_str}] Processed {len(summaries)} speakers")
         sess["last_hume_summary"] = summaries
-        
-        # Store the feedback in session for debugging
         sess["last_coach_feedback"] = feedback
-        
+
         await event_bus.emit_log(session_id, sess["logs"][-10:])
-        
+
     except Exception as e:
         print(f"❌ Error in Affina processing: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Try to emit an error message to frontend
         try:
             await event_bus.emit_advice(session_id, f"Coach temporarily unavailable: {str(e)}")
         except:

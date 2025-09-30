@@ -1,144 +1,174 @@
-# hume/hume_summarize.py
-from typing import Dict, Any, List
+# hume_summarize.py
+from __future__ import annotations
+
 import json
+import re
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
 
-def summarize(results: dict) -> dict:
-    """
-    Summarize Hume API results:
-    - Audio (prosody): transcript + top emotions
-    - Video (face): top emotions
-    """
-    summary = {"audio": {}, "video": {}}
+# ---------- I/O ----------
 
+def load_hume_json_from_file(path: str) -> Dict[str, Any]:
+    """
+    Hume batch results we receive are typically a one-element list: [{source, results}]
+    Return that single dict. Raise if shape is unexpected.
+    """
+    with open(path, "r") as f:
+        raw = json.load(f)
+    if isinstance(raw, list) and raw:
+        return raw[0]
+    if isinstance(raw, dict):
+        return raw
+    raise ValueError(f"Unexpected Hume JSON shape in {path!r}")
+
+# ---------- Helpers: Audio (Prosody) ----------
+
+def _iter_prosody_text_segments(hume_obj: Dict[str, Any]):
     try:
-        # Debug: Print the structure we're receiving
-        print(f"[DEBUG] Summarize input type: {type(results)}")
-        if isinstance(results, list) and len(results) > 0:
-            print(f"[DEBUG] First element keys: {results[0].keys() if isinstance(results[0], dict) else 'Not a dict'}")
-        
-        # Handle the actual Hume response structure
-        if isinstance(results, list) and results:
-            # Get the first result item
-            result_item = results[0]
-            
-            # Navigate to predictions
-            if "results" in result_item and isinstance(result_item["results"], dict):
-                predictions = result_item["results"].get("predictions", [])
+        groups = hume_obj["results"]["predictions"][0]["models"]["prosody"]["grouped_predictions"]
+    except KeyError:
+        return
+    for group in groups or []:
+        for p in group.get("predictions", []) or []:
+            yield {
+                "text": p.get("text"),
+                "begin": (p.get("time") or {}).get("begin"),
+                "end": (p.get("time") or {}).get("end"),
+                "confidence": p.get("confidence"),
+            }
+
+def extract_transcript_from_prosody(hume_obj: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Build a transcript by concatenating prosody text segments ordered by 'begin'.
+    Also return the raw segments for downstream use.
+    """
+    segs = [s for s in _iter_prosody_text_segments(hume_obj) if isinstance(s.get("text"), str)]
+    segs.sort(key=lambda s: (s.get("begin") if s.get("begin") is not None else 0.0))
+    transcript = " ".join(s["text"].strip() for s in segs if s["text"].strip())
+    return transcript, segs
+
+def aggregate_emotions_from_prosody(hume_obj: Dict[str, Any], top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Average scores per emotion name over all prosody predictions.
+    NEVER put dicts in sets or as keys — only use the string 'name'.
+    """
+    try:
+        groups = hume_obj["results"]["predictions"][0]["models"]["prosody"]["grouped_predictions"]
+    except KeyError:
+        return []
+    scores: Dict[str, List[float]] = defaultdict(list)
+    for g in groups or []:
+        for pred in g.get("predictions", []) or []:
+            for emo in pred.get("emotions", []) or []:
+                name = emo.get("name")
+                score = emo.get("score")
+                if isinstance(name, str) and isinstance(score, (int, float)):
+                    scores[name].append(float(score))
+    averaged = [(name, sum(vals) / len(vals)) for name, vals in scores.items() if vals]
+    averaged.sort(key=lambda x: x[1], reverse=True)
+    return [{"name": n, "score": round(s, 6)} for n, s in averaged[:top_k]]
+
+# ---------- Helpers: Video (Face) ----------
+
+def aggregate_emotions_from_face(hume_obj: Dict[str, Any], top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Average scores per emotion name over all face frames.
+    """
+    try:
+        groups = hume_obj["results"]["predictions"][0]["models"]["face"]["grouped_predictions"]
+    except KeyError:
+        return []
+    scores: Dict[str, List[float]] = defaultdict(list)
+    for g in groups or []:
+        for pred in g.get("predictions", []) or []:
+            for emo in pred.get("emotions", []) or []:
+                name = emo.get("name")
+                score = emo.get("score")
+                if isinstance(name, str) and isinstance(score, (int, float)):
+                    scores[name].append(float(score))
+    averaged = [(name, sum(vals) / len(vals)) for name, vals in scores.items() if vals]
+    averaged.sort(key=lambda x: x[1], reverse=True)
+    return [{"name": n, "score": round(s, 6)} for n, s in averaged[:top_k]]
+
+# ---------- Filename parsing ----------
+
+def parse_participant_and_ts_from_filename(hume_obj: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract "Participant_YYYYMMDD-HHMMSS_audio.wav" (or video.mp4) → (Participant, timestamp)
+    """
+    filename = (hume_obj.get("source") or {}).get("filename")
+    if not isinstance(filename, str):
+        return None, None
+    m = re.match(r"(.+?)_(\d{8}-\d{6})_(?:audio|video)\.(?:wav|mp4)$", filename)
+    if m:
+        return m.group(1), m.group(2)
+    return None, None
+
+# ---------- Public entrypoint ----------
+
+def summarize_hume_batch(
+    audio_obj: Optional[Dict[str, Any]],
+    video_obj: Optional[Dict[str, Any]],
+    participant: Optional[str] = None,
+    timestamp: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Build the final summary structure expected by your coach pipeline.
+    """
+    # Fill participant/timestamp from filenames if not given
+    if participant is None and audio_obj:
+        participant, _ = parse_participant_and_ts_from_filename(audio_obj)
+    if timestamp is None and audio_obj:
+        _, timestamp = parse_participant_and_ts_from_filename(audio_obj)
+    if participant is None and video_obj:
+        participant, _ = parse_participant_and_ts_from_filename(video_obj)
+    if timestamp is None and video_obj:
+        _, timestamp = parse_participant_and_ts_from_filename(video_obj)
+
+    pkey = participant or "unknown"
+    out: Dict[str, Any] = {pkey: {"audio": {}, "video": {}, "timestamp": timestamp or ""}}
+
+    # Audio summary
+    try:
+        if audio_obj:
+            transcript, segs = extract_transcript_from_prosody(audio_obj)
+            top = aggregate_emotions_from_prosody(audio_obj)
+            if not transcript and not top:
+                out[pkey]["audio"] = {"status": "no_data"}
             else:
-                print("[DEBUG] No 'results' key found in expected format")
-                return summary
-        elif isinstance(results, dict):
-            # Sometimes Hume returns a dict directly
-            if "predictions" in results:
-                predictions = results["predictions"]
-            elif "results" in results and "predictions" in results["results"]:
-                predictions = results["results"]["predictions"]
-            else:
-                print("[DEBUG] No predictions found in dict format")
-                return summary
+                out[pkey]["audio"] = {
+                    "status": "ok",
+                    "transcript": transcript,
+                    "segments": segs,
+                    "top_emotions": top,
+                }
         else:
-            print(f"[DEBUG] Unexpected results format: {type(results)}")
-            return summary
-
-        if not predictions:
-            print("[DEBUG] No predictions to process")
-            return summary
-
-        # Get the first prediction (there's usually only one per file)
-        if predictions and len(predictions) > 0:
-            prediction = predictions[0]
-            models = prediction.get("models", {})
-        else:
-            print("[DEBUG] Empty predictions list")
-            return summary
-
-        # ---------- AUDIO (Prosody) ----------
-        if "prosody" in models:
-            print("[DEBUG] Processing prosody model")
-            prosody = models["prosody"]
-            grouped_preds = prosody.get("grouped_predictions", [])
-
-            all_emotions = {}  # Use regular dict
-            transcripts = []
-
-            for gp in grouped_preds:
-                for pred in gp.get("predictions", []):
-                    # Collect transcript text if present
-                    text = pred.get("text")
-                    if text:
-                        transcripts.append(text.strip())
-
-                    # Collect emotion scores
-                    emotions_list = pred.get("emotions", [])
-                    for emo in emotions_list:
-                        if isinstance(emo, dict):  # Make sure it's a dict
-                            name = emo.get("name")
-                            score = emo.get("score")
-                            if name is not None and score is not None:
-                                if name not in all_emotions:
-                                    all_emotions[name] = []
-                                all_emotions[name].append(float(score))
-
-            if all_emotions:
-                # Calculate averages
-                avg_emotions = {}
-                for name, scores in all_emotions.items():
-                    if scores:  # Make sure we have scores
-                        avg_emotions[name] = sum(scores) / len(scores)
-                
-                # Get top 3
-                if avg_emotions:
-                    top3 = sorted(avg_emotions.items(), key=lambda x: x[1], reverse=True)[:3]
-                    summary["audio"]["top_emotions"] = top3
-                    print(f"[DEBUG] Audio top emotions: {top3[:1]}")  # Just show first
-
-            if transcripts:
-                summary["audio"]["transcript"] = " ".join(transcripts)
-                print(f"[DEBUG] Audio transcript length: {len(summary['audio']['transcript'])}")
-
-        # ---------- VIDEO (Face) ----------
-        if "face" in models:
-            print("[DEBUG] Processing face model")
-            face = models["face"]
-            grouped_preds = face.get("grouped_predictions", [])
-
-            all_emotions = {}  # Use regular dict
-
-            for gp in grouped_preds:
-                for pred in gp.get("predictions", []):
-                    # For face model, emotions are directly in each prediction
-                    emotions_list = pred.get("emotions", [])
-                    for emo in emotions_list:
-                        if isinstance(emo, dict):  # Make sure it's a dict
-                            name = emo.get("name")
-                            score = emo.get("score")
-                            if name is not None and score is not None:
-                                if name not in all_emotions:
-                                    all_emotions[name] = []
-                                all_emotions[name].append(float(score))
-
-            if all_emotions:
-                # Calculate averages
-                avg_emotions = {}
-                for name, scores in all_emotions.items():
-                    if scores:  # Make sure we have scores
-                        avg_emotions[name] = sum(scores) / len(scores)
-                
-                # Get top 3
-                if avg_emotions:
-                    top3 = sorted(avg_emotions.items(), key=lambda x: x[1], reverse=True)[:3]
-                    summary["video"]["top_emotions"] = top3
-                    print(f"[DEBUG] Video top emotions: {top3[:1]}")  # Just show first
-
+            out[pkey]["audio"] = {"status": "missing"}
     except Exception as e:
-        error_msg = f"summarize failed: {str(e)}"
-        summary["error"] = error_msg
-        print(f"[DEBUG] {error_msg}")
-        import traceback
-        traceback.print_exc()
-        
-        # Return error in both audio and video
-        summary["audio"] = {"status": "error", "error": str(e)}
-        summary["video"] = {"status": "error", "error": str(e)}
+        out[pkey]["audio"] = {"status": "error", "error": str(e)}
 
-    return summary
+    # Video summary
+    try:
+        if video_obj:
+            topv = aggregate_emotions_from_face(video_obj)
+            try:
+                frame_count = sum(
+                    len(g.get("predictions", []))
+                    for g in video_obj["results"]["predictions"][0]["models"]["face"]["grouped_predictions"]
+                )
+            except Exception:
+                frame_count = 0
+            if not topv and frame_count == 0:
+                out[pkey]["video"] = {"status": "no_data"}
+            else:
+                out[pkey]["video"] = {
+                    "status": "ok",
+                    "frame_count": frame_count,
+                    "top_emotions": topv,
+                }
+        else:
+            out[pkey]["video"] = {"status": "missing"}
+    except Exception as e:
+        out[pkey]["video"] = {"status": "error", "error": str(e)}
+
+    return out
