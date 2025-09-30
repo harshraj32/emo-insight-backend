@@ -99,6 +99,7 @@ def create_clips_for_all_sync(session_id, participants, start, end):
             # --------------------
             # Process audio only → Hume prosody
             # --------------------
+
             audio_summary = {}
             try:
                 audio_results = hume_client.process_clip(
@@ -145,6 +146,14 @@ def create_clips_for_all_sync(session_id, participants, start, end):
             # --------------------
             # Merge into summaries
             # --------------------
+            # log audio + video sizes
+            try:
+                import os, logging
+                logger = logging.getLogger("emo-insight")
+                logger.info(f"🎤 Audio size: {os.path.getsize(wav_path)} bytes, 🎞️ Frames: {frame_count} for {speaker}")
+            except Exception as e:
+                logger.warning(f"Could not log audio/video info: {e}")
+
             summaries[str(speaker)] = {
                 "audio": audio_summary,
                 "video": video_summary,
