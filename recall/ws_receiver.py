@@ -297,12 +297,14 @@ async def process_affina_feedback(session_id, summaries, ts_str):
         
         # Emit advice
         if isinstance(feedback, dict):
-            advice = feedback.get("recommendation", json.dumps(feedback))
+            advice_payload = feedback
         else:
-            advice = str(feedback)
-        
-        await event_bus.emit_advice(session_id, advice)
-        
+            advice_payload = {"recommendation": str(feedback)}
+
+        await event_bus.emit_advice(session_id, {
+            "session_id": session_id,
+            "advice": advice_payload
+        })
         # Update logs
         sess["logs"].append(f"[{ts_str}] Processed {len(summaries)} speakers")
         sess["last_hume_summary"] = summaries
@@ -371,27 +373,24 @@ async def fastapi_handler(websocket: WebSocket):
                     participant_data[participant_key]["frames"].append((buf_b64, ts_now))
             
             elif evt_type == "audio_separate_raw.data":
-                buf_b64 = payload.get("buffer")
-                rel_ts = payload.get("timestamp", {}).get("relative")
-                
-                if buf_b64:
+                buf_b64 = payload.get("buffer", "")
+                rel_ts  = payload.get("timestamp", {}).get("relative")
+
+                if buf_b64 and rel_ts is not None:
                     pcm_bytes = base64.b64decode(buf_b64)
+
                     data = participant_data[participant_key]
-                    
-                    # Handle audio gaps
-                    if rel_ts is not None and data["last_audio_ts"] is not None:
+
+                    # Gap fill exactly like in test.py
+                    if data["last_audio_ts"] is not None:
                         expected_samples = int((rel_ts - data["last_audio_ts"]) * AUDIO_RATE)
-                        actual_samples = len(pcm_bytes) // SAMPLE_WIDTH
-                        gap_samples = expected_samples - actual_samples
-                        
-                        if gap_samples > 0:
-                            # Insert silence for gaps
-                            silence = b"\x00" * (gap_samples * SAMPLE_WIDTH)
-                            data["audio_buffer"].extend(silence)
-                    
+                        gap = expected_samples - (len(pcm_bytes) // SAMPLE_WIDTH)
+                        if gap > 0:
+                            data["audio_buffer"].extend(b"\x00" * gap * SAMPLE_WIDTH)
+
                     data["audio_buffer"].extend(pcm_bytes)
-                    if rel_ts is not None:
-                        data["last_audio_ts"] = rel_ts
+                    data["last_audio_ts"] = rel_ts
+
             
             elif evt_type in ["transcript.data", "transcript.partial_data"]:
                 words = [w.get("text", "") for w in payload.get("words", [])]
