@@ -100,6 +100,9 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                             models={"prosody": {"granularity": "utterance"}},
                         )
                         print(f"✅ Audio processed for {clean_speaker}: {os.path.getsize(audio_clip_path)} bytes")
+
+                        if isinstance(audio_results, list):
+                            audio_results = audio_results[0]
                     else:
                         print(f"⚠️ Empty audio file for {clean_speaker}")
                 except subprocess.CalledProcessError as e:
@@ -141,6 +144,9 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                             models={"face": {"fps_pred": 3}},
                         )
                         print(f"✅ Video processed for {clean_speaker}: {frame_count} frames")
+
+                        if isinstance(video_results, list):
+                            video_results = video_results[0]
                     else:
                         print(f"⚠️ Empty video file for {clean_speaker}")
                 except subprocess.CalledProcessError as e:
