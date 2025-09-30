@@ -12,7 +12,6 @@ from pathlib import Path
 from fastapi import WebSocket
 from config import settings
 from hume import hume_client
-from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
 import event_bus
 from hume.hume_summarize import load_hume_json_from_file, summarize_hume_batch
