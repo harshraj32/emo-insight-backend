@@ -42,11 +42,11 @@ def safe_summary(data):
     except Exception as e:
         return {"error": f"serialization failed: {e}"}
     
-
 def create_clips_for_all_sync(session_id, participants, start, end):
     """
     Synchronous function to create clips for all participants.
-    This runs in the executor thread pool.
+    Processes audio and video separately through Hume,
+    then merges results into summaries[speaker].
     """
     summaries = {}
     ts_str = datetime.datetime.fromtimestamp(start).strftime("%Y%m%d-%H%M%S")
@@ -59,7 +59,9 @@ def create_clips_for_all_sync(session_id, participants, start, end):
         os.makedirs(temp_dir, exist_ok=True)
 
         try:
-            # save frames
+            # --------------------
+            # Save video frames
+            # --------------------
             frame_count = 0
             for frame_data, frame_time in data["frames"]:
                 if start <= frame_time <= end:
@@ -72,12 +74,13 @@ def create_clips_for_all_sync(session_id, participants, start, end):
                 print(f"📹 No data available for {speaker}")
                 continue
 
-            # save audio.raw
+            # --------------------
+            # Save audio
+            # --------------------
             raw_path = os.path.join(temp_dir, "audio.raw")
             with open(raw_path, "wb") as f:
                 f.write(data["audio_buffer"])
 
-            # convert to wav
             wav_path = os.path.join(temp_dir, "audio.wav")
             subprocess.run(
                 [
@@ -93,62 +96,64 @@ def create_clips_for_all_sync(session_id, participants, start, end):
                 capture_output=True,
             )
 
-            # if we have frames, create video
+            # --------------------
+            # Process audio only → Hume prosody
+            # --------------------
+            audio_summary = {}
+            try:
+                audio_results = hume_client.process_clip(
+                    Path(wav_path), models={"prosody": {"granularity": "utterance"}}
+                )
+                audio_summary = safe_summary(summarize(audio_results))
+                print(f"🎵 Processed audio for {speaker}")
+            except Exception as e:
+                audio_summary = {"error": f"audio processing failed: {e}"}
+                print(f"⚠️ Audio error for {speaker}: {e}")
+
+            # --------------------
+            # Process video frames only → Hume face
+            # --------------------
+            video_summary = {}
             if frame_count > 0:
-                # create video from frames
                 frame_pattern = os.path.join(temp_dir, "frame_%04d.png")
                 video_temp = os.path.join(temp_dir, "video_temp.mp4")
-                subprocess.run(
-                    [
-                        "ffmpeg", "-y",
-                        "-framerate", str(FPS),
-                        "-i", frame_pattern,
-                        "-t", str(CLIP_LEN),
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        video_temp,
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
 
-                # combine audio + video
-                mp4_out = os.path.join(session_dir, f"{clip_name}.mp4")
-                subprocess.run(
-                    [
-                        "ffmpeg", "-y",
-                        "-i", video_temp,
-                        "-i", wav_path,
-                        "-c:v", "copy",
-                        "-c:a", "aac",
-                        "-shortest",
-                        mp4_out,
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
+                try:
+                    subprocess.run(
+                        [
+                            "ffmpeg", "-y",
+                            "-framerate", str(FPS),
+                            "-i", frame_pattern,
+                            "-t", str(CLIP_LEN),
+                            "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p",
+                            video_temp,
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
 
-                # send to Hume
-                results = hume_client.process_clip(
-                    Path(mp4_out), models={"prosody": {}, "face": {}}
-                )
-                summaries[str(speaker)] = safe_summary(summarize(results))
+                    video_results = hume_client.process_clip(
+                        Path(video_temp), models={"face": {"fps_pred": 3}}
+                    )
+                    video_summary = safe_summary(summarize(video_results))
+                    print(f"🎬 Processed video for {speaker}")
+                except Exception as e:
+                    video_summary = {"error": f"video processing failed: {e}"}
+                    print(f"⚠️ Video error for {speaker}: {e}")
 
-                print(f"🎬 Processed clip for {speaker} in session {session_id}")
-
-                # cleanup mp4 after processing
-                os.remove(mp4_out)
-            else:
-                # audio only
-                results = hume_client.process_clip(
-                    Path(wav_path), models={"prosody": {}}
-                )
-                summaries[str(speaker)] = safe_summary(summarize(results))
-                print(f"🎵 Processed audio-only clip for {speaker}")
+            # --------------------
+            # Merge into summaries
+            # --------------------
+            summaries[str(speaker)] = {
+                "audio": audio_summary,
+                "video": video_summary,
+            }
 
         except Exception as e:
             summaries[speaker] = {"error": str(e)}
             print(f"⚠️ Error processing {speaker}: {e}")
+
         finally:
             subprocess.run(["rm", "-rf", temp_dir])
 
