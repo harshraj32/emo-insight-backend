@@ -62,4 +62,14 @@ def process_clip(file: Union[str, Path], models: Dict[str, Any] = None) -> Dict[
     state = wait_job(job_id)
     if state != "COMPLETED":
         raise RuntimeError(f"Hume job failed: {job_id}")
-    return get_results(job_id)
+    results = get_results(job_id)
+
+    # 🔎 Debug: print raw Hume output
+    print("\n[DEBUG] Raw Hume results:")
+    try:
+        print(json.dumps(results, indent=2, default=str))
+    except Exception as e:
+        print(f"[DEBUG] Could not serialize results: {e}")
+        print(results)
+
+    return results
