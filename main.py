@@ -14,7 +14,7 @@ from hume.hume_client import process_clip
 from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
 import event_bus
-from ws_receiver import fastapi_handler
+from recall.ws_receiver import fastapi_handler
 
 # ===== Logging setup =====
 logging.basicConfig(
