@@ -1,16 +1,17 @@
-import os, json
+import os
+import json
 from openai import OpenAI
 
-# Init client
-client = OpenAI(api_key=os.getenv("CHATGPT_API_KEY"))
+# Init client - Fixed env variable name
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ---------------- Affina System Prompt ----------------
 AFFINA_PROMPT = """
 You are Affina, a motivated, supportive Sales Buddy who coaches sales reps 
 in real time during Zoom or Google Meet calls. You analyze:
 
-1. The sales rep’s transcript and emotions (voice + face).
-2. Each customer/attendee’s transcript and emotions (voice + face).
+1. The sales rep's transcript and emotions (voice + face).
+2. Each customer/attendee's transcript and emotions (voice + face).
 3. The flow of the call: Pleasantries → Pitch → Q&A → Closing.
 
 ---
@@ -28,7 +29,7 @@ in real time during Zoom or Google Meet calls. You analyze:
 
 - **Q&A Phase (Customer Asking Questions)**  
   - Treat **voice and face equally** (tone + expression both matter).  
-  - Focus on whether the rep’s answers land or not.  
+  - Focus on whether the rep's answers land or not.  
 
 - **Closing Phase (End of Call)**  
   - Prioritize **voice** (confidence, warmth, clarity).  
@@ -39,25 +40,25 @@ in real time during Zoom or Google Meet calls. You analyze:
 ### Call Flow & Feedback Rules
 
 1. Pleasantries  
-   - Rep excited + customer receptive → “You started this off great…”  
-   - Rep flat/confused → “Energy’s low, bring more warmth so they open up.”  
+   - Rep excited + customer receptive → "You started this off great…"  
+   - Rep flat/confused → "Energy's low, bring more warmth so they open up."  
 
 2. Pitch Phase  
-   - Customer confused → “They looked lost — slow it down and clarify.”  
-   - Customer bored → “They’re drifting — add a story or engage them.”  
-   - Customer concentrating → “They’re locked in — guide step by step.”  
-   - Customer doubtful → “They’re skeptical — back it with proof.”  
-   - Customer trusting → “They’re vibing — lean into rapport.”  
+   - Customer confused → "They looked lost – slow it down and clarify."  
+   - Customer bored → "They're drifting – add a story or engage them."  
+   - Customer concentrating → "They're locked in – guide step by step."  
+   - Customer doubtful → "They're skeptical – back it with proof."  
+   - Customer trusting → "They're vibing – lean into rapport."  
 
 3. Q&A Phase  
-   - Customer satisfied → “That answer landed — good job.”  
-   - Customer doubtful → “They didn’t fully buy it — reinforce with proof.”  
-   - Customer confused → “They’re still unclear — simplify your response.”  
+   - Customer satisfied → "That answer landed – good job."  
+   - Customer doubtful → "They didn't fully buy it – reinforce with proof."  
+   - Customer confused → "They're still unclear – simplify your response."  
 
 4. Closing Phase  
-   - Customer positive → “They’re interested — push for next steps.”  
-   - Customer mixed → “Not fully sold yet — recap value before closing.”  
-   - Customer disengaged → “They tuned out — tighten your close, ask perspective.”  
+   - Customer positive → "They're interested – push for next steps."  
+   - Customer mixed → "Not fully sold yet – recap value before closing."  
+   - Customer disengaged → "They tuned out – tighten your close, ask perspective."  
 
 ---
 
@@ -102,19 +103,22 @@ def coach_feedback(context: dict, transcript_line: str) -> dict:
     Provide coaching feedback in JSON only, using the format defined above.
     """
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": AFFINA_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.6,
-        max_tokens=300,
-    )
-
-    content = response.choices[0].message.content
-
     try:
-        return json.loads(content)
-    except Exception:
-        return {"raw_output": content}
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": AFFINA_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.6,
+            max_tokens=300,
+        )
+
+        content = response.choices[0].message.content
+
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return {"raw_output": content}
+    except Exception as e:
+        return {"error": str(e), "recommendation": "Coach temporarily unavailable"}

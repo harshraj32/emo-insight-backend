@@ -4,7 +4,7 @@ import uuid
 import logging
 from typing import Dict, Any
 
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_socketio import SocketManager
 
@@ -14,6 +14,7 @@ from hume.hume_client import process_clip
 from hume.hume_summarize import summarize
 from affina.coach import coach_feedback
 import event_bus
+from ws_receiver import fastapi_handler
 
 # ===== Logging setup =====
 logging.basicConfig(
@@ -24,7 +25,10 @@ logger = logging.getLogger("emo-insight")
 
 # ===== FastAPI + Socket.IO =====
 app = FastAPI(title="SalesBuddy Backend", version="1.0.0")
-socket_manager = SocketManager(app, cors_allowed_origins="*")
+
+# For Render deployment - allow all origins or specify your frontend URL
+cors_origins = os.getenv("FRONTEND_ORIGIN", "*").split(",")
+socket_manager = SocketManager(app, cors_allowed_origins=cors_origins)
 
 # ===== CORS =====
 app.add_middleware(
@@ -65,6 +69,11 @@ async def _emit_log(session_id: str, logs: list):
 event_bus.emit_advice = _emit_advice
 event_bus.emit_emotion = _emit_emotion
 event_bus.emit_log = _emit_log
+
+# ===== WebSocket route for Recall.ai =====
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await fastapi_handler(websocket)
 
 # ===== Socket.IO Events =====
 @socket_manager.on("join_session")
