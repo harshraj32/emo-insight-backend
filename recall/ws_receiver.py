@@ -8,7 +8,8 @@ import time
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-
+import logging
+logger = logging.getLogger(__name__)
 from fastapi import WebSocket
 from config import settings
 from hume import hume_client
@@ -146,6 +147,22 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                     print(f"❌ FFmpeg video failed for {clean_speaker}: {e.stderr}")
                 except Exception as e:
                     print(f"❌ Video processing error for {clean_speaker}: {e}")
+            logger.debug("Raw video_results from Hume (type=%s): %s", type(video_results), video_results)
+
+            if isinstance(video_results, (dict, list)):
+                try:
+                    logger.debug("Raw video_results JSON dump:\n%s",
+                                json.dumps(video_results, indent=2)[:4000])
+                except Exception as e:
+                    logger.debug("Could not JSON dump video_results: %s", e)
+            
+            if isinstance(audio_results, (dict, list)):
+                try:
+                    logger.debug("Raw video_results JSON dump:\n%s",
+                                json.dumps(audio_results, indent=2)[:4000])
+                except Exception as e:
+                    logger.debug("Could not JSON dump video_results: %s", e)
+
 
             # 👉 NEW: build unified summary
             summary = summarize_hume_batch(
@@ -168,7 +185,7 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
         finally:
             if os.path.exists(temp_dir):
                 subprocess.run(["rm", "-rf", temp_dir], capture_output=True)
-
+    
     return summaries, ts_str
 def check_and_create_clips(session_id):
     """

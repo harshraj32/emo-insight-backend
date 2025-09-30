@@ -1,0 +1,306 @@
+{
+  "20250927-164514": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "text": "Hey. How's is it going? I was",
+      "top_emotions": [
+        [
+          "Calmness",
+          0.21855466067790985
+        ],
+        [
+          "Interest",
+          0.1507214866578579
+        ],
+        [
+          "Contemplation",
+          0.09932917915284634
+        ]
+      ]
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Confusion",
+          0.4698218464851379
+        ],
+        [
+          "Calmness",
+          0.4032063469290733
+        ],
+        [
+          "Concentration",
+          0.4019475057721138
+        ]
+      ]
+    }
+  },
+  "20250927-164519": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "text": "I hope it was really good, and I had... I hope that you had really fun time.",
+      "top_emotions": [
+        [
+          "Sympathy",
+          0.4722844958305359
+        ],
+        [
+          "Interest",
+          0.4704537093639374
+        ],
+        [
+          "Contemplation",
+          0.4205942451953888
+        ]
+      ]
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Confusion",
+          0.44417470693588257
+        ],
+        [
+          "Concentration",
+          0.36617335230112075
+        ],
+        [
+          "Calmness",
+          0.36262996345758436
+        ]
+      ]
+    }
+  },
+  "20250927-164524": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "text": "And other people.",
+      "top_emotions": [
+        [
+          "Calmness",
+          0.2844131588935852
+        ],
+        [
+          "Determination",
+          0.19242943823337555
+        ],
+        [
+          "Interest",
+          0.15561330318450928
+        ]
+      ]
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Calmness",
+          0.5505507224135928
+        ],
+        [
+          "Concentration",
+          0.456826776266098
+        ],
+        [
+          "Boredom",
+          0.45516491929690045
+        ]
+      ]
+    }
+  },
+  "20250927-164529": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "error": "list index out of range"
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Calmness",
+          0.6029065787792206
+        ],
+        [
+          "Boredom",
+          0.5905507534742356
+        ],
+        [
+          "Concentration",
+          0.5242823362350464
+        ]
+      ]
+    }
+  },
+  "20250927-173834": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "text": "Hello? I was it going, hope you had a great evening.",
+      "top_emotions": [
+        [
+          "Calmness",
+          0.23717030137777328
+        ],
+        [
+          "Boredom",
+          0.2083137333393097
+        ],
+        [
+          "Disappointment",
+          0.13759231194853783
+        ]
+      ]
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Confusion",
+          0.4100494787096977
+        ],
+        [
+          "Calmness",
+          0.39943811297416687
+        ],
+        [
+          "Concentration",
+          0.36671101450920107
+        ]
+      ]
+    }
+  },
+  "20250927-173839": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "text": "The weekend. Is there anything else that you wanted to talk to me about?",
+      "top_emotions": [
+        [
+          "Calmness",
+          0.1602936089038849
+        ],
+        [
+          "Concentration",
+          0.12141053006052971
+        ],
+        [
+          "Interest",
+          0.11814752221107483
+        ]
+      ]
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Calmness",
+          0.41764328877131146
+        ],
+        [
+          "Confusion",
+          0.40985067354308236
+        ],
+        [
+          "Concentration",
+          0.38088612920708126
+        ]
+      ]
+    }
+  },
+  "20250927-173844": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "text": "It's really interesting.",
+      "top_emotions": [
+        [
+          "Interest",
+          0.2624388635158539
+        ],
+        [
+          "Admiration",
+          0.25507333874702454
+        ],
+        [
+          "Surprise (positive)",
+          0.19700412452220917
+        ]
+      ]
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Confusion",
+          0.46859095990657806
+        ],
+        [
+          "Calmness",
+          0.4646615654230118
+        ],
+        [
+          "Concentration",
+          0.45630997121334077
+        ]
+      ]
+    }
+  },
+  "20250927-173849": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "error": "list index out of range"
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Calmness",
+          0.5118907160229154
+        ],
+        [
+          "Concentration",
+          0.49539786246087814
+        ],
+        [
+          "Boredom",
+          0.4536348515086704
+        ]
+      ]
+    }
+  },
+  "20250927-173854": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "error": "list index out of range"
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Calmness",
+          0.5445052742958069
+        ],
+        [
+          "Concentration",
+          0.5270684450864792
+        ],
+        [
+          "Boredom",
+          0.49945547580718996
+        ]
+      ]
+    }
+  },
+  "20250927-173859": {
+    "speaker": "Harsh_Raj_Jeripothula",
+    "audio": {
+      "error": "list index out of range"
+    },
+    "video": {
+      "top_emotions": [
+        [
+          "Calmness",
+          0.5628007829189301
+        ],
+        [
+          "Concentration",
+          0.5257074296474457
+        ],
+        [
+          "Boredom",
+          0.5179626882076264
+        ]
+      ]
+    }
+  }
+}
