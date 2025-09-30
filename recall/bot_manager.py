@@ -15,7 +15,7 @@ def start_bot(meeting_url: str, session_id: str):
     including the session_id so ws_receiver can pull rep + objective.
     """
     # Build WebSocket URL with session_id parameter
-    ws_url = f"{settings.BACKEND_URL.replace('https://', 'wss://')}/ws?session_id={session_id}"
+    ws_url = f"{settings.RENDER_EXTERNAL_URL.replace('https://', 'wss://')}/ws?session_id={session_id}"
 
     payload = {
         "meeting_url": meeting_url,
