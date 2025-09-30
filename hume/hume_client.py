@@ -10,6 +10,11 @@ from config import settings
 API = "https://api.hume.ai/v0"
 HEADERS = {"X-Hume-Api-Key": settings.HUME_API_KEY}
 
+import mimetypes
+
+def _guess_mime(path: Path) -> str:
+    mt, _ = mimetypes.guess_type(str(path))
+    return mt or ("audio/wav" if path.suffix.lower()==".wav" else "video/mp4")
 
 def start_job(file: Union[str, Path], models: Dict[str, Any]) -> str:
     file = Path(file)
@@ -17,14 +22,14 @@ def start_job(file: Union[str, Path], models: Dict[str, Any]) -> str:
         raise FileNotFoundError(file)
 
     with file.open("rb") as fh:
-        files = {"file": fh}
-        # Hume expects a "json" form field containing JSON-encoded string
-        data = {"json": json.dumps({"models": models})}
+        files = {"file": (file.name, fh, _guess_mime(file))}
+        data  = {"json": json.dumps({"models": models})}
         r = requests.post(f"{API}/batch/jobs", files=files, data=data, headers=HEADERS, timeout=max(60, settings.HTTP_TIMEOUT))
     r.raise_for_status()
-    job_id = r.json().get("job_id")
+    job = r.json()
+    job_id = job.get("job_id") or job.get("id") or job.get("jobId")
     if not job_id:
-        raise RuntimeError(f"Hume start_job missing job_id: {r.text}")
+        raise RuntimeError(f"Hume start_job missing job_id: {job}")
     return job_id
 
 
