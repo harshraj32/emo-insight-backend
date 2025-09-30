@@ -34,6 +34,14 @@ participant_data = defaultdict(
         "start_time": None,
     }
 )
+import json
+
+def safe_summary(data):
+    try:
+        return json.loads(json.dumps(data))  # force JSON-safe
+    except Exception as e:
+        return {"error": f"serialization failed: {e}"}
+    
 
 def create_clips_for_all_sync(session_id, participants, start, end):
     """
@@ -124,7 +132,7 @@ def create_clips_for_all_sync(session_id, participants, start, end):
                 results = hume_client.process_clip(
                     Path(mp4_out), models={"prosody": {}, "face": {}}
                 )
-                summaries[speaker] = summarize(results)
+                summaries[str(speaker)] = safe_summary(summarize(results))
 
                 print(f"🎬 Processed clip for {speaker} in session {session_id}")
 
@@ -135,7 +143,7 @@ def create_clips_for_all_sync(session_id, participants, start, end):
                 results = hume_client.process_clip(
                     Path(wav_path), models={"prosody": {}}
                 )
-                summaries[speaker] = summarize(results)
+                summaries[str(speaker)] = safe_summary(summarize(results))
                 print(f"🎵 Processed audio-only clip for {speaker}")
 
         except Exception as e:
