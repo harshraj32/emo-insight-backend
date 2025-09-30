@@ -149,19 +149,6 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                     print(f"❌ Video processing error for {clean_speaker}: {e}")
             logger.debug("Raw video_results from Hume (type=%s): %s", type(video_results), video_results)
 
-            if isinstance(video_results, (dict, list)):
-                try:
-                    logger.debug("Raw video_results JSON dump:\n%s",
-                                json.dumps(video_results, indent=2)[:4000])
-                except Exception as e:
-                    logger.debug("Could not JSON dump video_results: %s", e)
-            
-            if isinstance(audio_results, (dict, list)):
-                try:
-                    logger.debug("Raw video_results JSON dump:\n%s",
-                                json.dumps(audio_results, indent=2)[:4000])
-                except Exception as e:
-                    logger.debug("Could not JSON dump video_results: %s", e)
 
 
             # 👉 NEW: build unified summary
@@ -173,7 +160,7 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
             )
 
             summaries[clean_speaker] = summary[clean_speaker]
-            print(f"🎉 Summary created for {summaries}")
+            print(f"🎉 Summary created for {clean_speaker}")
         except Exception as e:
             summaries[clean_speaker] = {
                 "audio": {"status": "error", "error": str(e)},
