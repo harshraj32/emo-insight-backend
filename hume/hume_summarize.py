@@ -21,14 +21,27 @@ def load_hume_json_from_file(path: str) -> Dict[str, Any]:
         return raw
     raise ValueError(f"Unexpected Hume JSON shape in {path!r}")
 
+# ---------- Core Helper ----------
+
+def _get_grouped_predictions(hume_obj: Dict[str, Any], model: str) -> List[Dict[str, Any]]:
+    """
+    Safely extract grouped_predictions for a given model ("prosody", "face").
+    Returns [] if predictions are missing or empty.
+    """
+    try:
+        preds = hume_obj.get("results", {}).get("predictions", [])
+        if not isinstance(preds, list) or not preds:
+            return []
+        models = preds[0].get("models", {})
+        return models.get(model, {}).get("grouped_predictions", []) or []
+    except Exception:
+        return []
+
 # ---------- Helpers: Audio (Prosody) ----------
 
 def _iter_prosody_text_segments(hume_obj: Dict[str, Any]):
-    try:
-        groups = hume_obj["results"]["predictions"][0]["models"]["prosody"]["grouped_predictions"]
-    except KeyError:
-        return
-    for group in groups or []:
+    groups = _get_grouped_predictions(hume_obj, "prosody")
+    for group in groups:
         for p in group.get("predictions", []) or []:
             yield {
                 "text": p.get("text"),
@@ -50,14 +63,10 @@ def extract_transcript_from_prosody(hume_obj: Dict[str, Any]) -> Tuple[str, List
 def aggregate_emotions_from_prosody(hume_obj: Dict[str, Any], top_k: int = 5) -> List[Dict[str, Any]]:
     """
     Average scores per emotion name over all prosody predictions.
-    NEVER put dicts in sets or as keys — only use the string 'name'.
     """
-    try:
-        groups = hume_obj["results"]["predictions"][0]["models"]["prosody"]["grouped_predictions"]
-    except KeyError:
-        return []
+    groups = _get_grouped_predictions(hume_obj, "prosody")
     scores: Dict[str, List[float]] = defaultdict(list)
-    for g in groups or []:
+    for g in groups:
         for pred in g.get("predictions", []) or []:
             for emo in pred.get("emotions", []) or []:
                 name = emo.get("name")
@@ -74,12 +83,9 @@ def aggregate_emotions_from_face(hume_obj: Dict[str, Any], top_k: int = 5) -> Li
     """
     Average scores per emotion name over all face frames.
     """
-    try:
-        groups = hume_obj["results"]["predictions"][0]["models"]["face"]["grouped_predictions"]
-    except KeyError:
-        return []
+    groups = _get_grouped_predictions(hume_obj, "face")
     scores: Dict[str, List[float]] = defaultdict(list)
-    for g in groups or []:
+    for g in groups:
         for pred in g.get("predictions", []) or []:
             for emo in pred.get("emotions", []) or []:
                 name = emo.get("name")
@@ -151,13 +157,8 @@ def summarize_hume_batch(
     try:
         if video_obj:
             topv = aggregate_emotions_from_face(video_obj)
-            try:
-                frame_count = sum(
-                    len(g.get("predictions", []))
-                    for g in video_obj["results"]["predictions"][0]["models"]["face"]["grouped_predictions"]
-                )
-            except Exception:
-                frame_count = 0
+            groups = _get_grouped_predictions(video_obj, "face")
+            frame_count = sum(len(g.get("predictions", [])) for g in groups)
             if not topv and frame_count == 0:
                 out[pkey]["video"] = {"status": "no_data"}
             else:
