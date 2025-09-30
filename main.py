@@ -3,7 +3,7 @@ import time
 import uuid
 import logging
 from typing import Dict, Any
-
+import os
 from fastapi import FastAPI, Body, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_socketio import SocketManager
