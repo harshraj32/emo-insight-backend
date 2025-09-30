@@ -5,7 +5,7 @@ import json
 import requests
 from typing import Dict, Any, Union
 from config import settings
-
+import os
 
 API = "https://api.hume.ai/v0"
 HEADERS = {"X-Hume-Api-Key": settings.HUME_API_KEY}
@@ -30,6 +30,9 @@ def start_job(file: Union[str, Path], models: Dict[str, Any]) -> str:
     job_id = job.get("job_id") or job.get("id") or job.get("jobId")
     if not job_id:
         raise RuntimeError(f"Hume start_job missing job_id: {job}")
+    
+    print(f"📤 Sending to Hume: {file} ({os.path.getsize(file)} bytes)")
+    print(f"Headers: {HEADERS}")
     return job_id
 
 

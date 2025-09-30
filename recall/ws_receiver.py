@@ -253,6 +253,9 @@ def check_and_create_clips(session_id):
                 traceback.print_exc()
         
         asyncio.create_task(process_results())
+    
+    print(f"⏱️ Clip timer ran for {session_id}")
+
 
 async def process_affina_feedback(session_id, summaries, ts_str):
     """
