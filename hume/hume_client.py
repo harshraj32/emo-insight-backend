@@ -40,14 +40,16 @@ def wait_job(job_id: str, poll_s: float = 2.0, timeout_s: float = None) -> str:
     timeout_s = timeout_s or settings.HUME_JOB_TIMEOUT
     t0 = time.time()
     while True:
-        r = requests.get(f"{API}/batch/jobs/{job_id}", headers=HEADERS, timeout=settings.HTTP_TIMEOUT)
-        r.raise_for_status()
-        state = r.json().get("state", "")
-        if state in {"COMPLETED", "FAILED"}:
-            return state
+        resp = requests.get(f"{API}/batch/jobs/{job_id}", headers=HEADERS, timeout=settings.HTTP_TIMEOUT)
+        resp.raise_for_status()
+        job = resp.json()
+        status = job.get("state", {}).get("status", "")
+        if status in {"COMPLETED", "FAILED"}:
+            return status
         if time.time() - t0 > timeout_s:
             return "FAILED"
         time.sleep(poll_s)
+
 
 
 def get_results(job_id: str) -> Dict[str, Any]:
