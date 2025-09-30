@@ -147,9 +147,6 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                     print(f"❌ FFmpeg video failed for {clean_speaker}: {e.stderr}")
                 except Exception as e:
                     print(f"❌ Video processing error for {clean_speaker}: {e}")
-            logger.debug("Raw video_results from Hume (type=%s): %s", type(video_results), video_results)
-
-
 
             # 👉 NEW: build unified summary
             summary = summarize_hume_batch(
@@ -266,7 +263,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
         # Debug: Print what we're sending to Affina
         print(f"\n[DEBUG] Sending to Affina:")
         print(f"  Session: {session_id}")
-        print(f"  Summaries: {json.dumps(summaries, indent=2)}")
+        #print(f"  Summaries: {json.dumps(summaries, indent=2)}")
 
         # Prepare context for coach
         context = {
