@@ -13,7 +13,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 import event_bus
 from affina.coach import coach_feedback
-from config import settings, storage
+from config import settings
+from config import storage
+print(storage.__file__) 
 from fastapi import WebSocket
 from hume import hume_client
 from hume.hume_summarize import summarize_hume_batch
