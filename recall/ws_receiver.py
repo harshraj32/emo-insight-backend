@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 import event_bus
 from affina.coach import coach_feedback
 from config import settings
-from backend.config import storage_utils
+from config import storage_utils
 from fastapi import WebSocket
 from hume import hume_client
 from hume.hume_summarize import summarize_hume_batch
