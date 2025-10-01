@@ -14,8 +14,7 @@ logger = logging.getLogger(__name__)
 import event_bus
 from affina.coach import coach_feedback
 from config import settings
-from config import storage
-print(storage.__file__) 
+from backend.config import storage_utils
 from fastapi import WebSocket
 from hume import hume_client
 from hume.hume_summarize import summarize_hume_batch
@@ -322,11 +321,11 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         for speaker, summary in summaries.items():
             # Save emotion trail to disk
-            storage.save_emotion_trail(session_id, speaker, ts_str, summary)
+            storage_utils.save_emotion_trail(session_id, speaker, ts_str, summary)
 
             # Check if emotions changed
-            last_state = storage.get_last_emotion_state(session_id, speaker)
-            if storage.has_emotion_changed(last_state, summary, threshold=0.1):
+            last_state = storage_utils.get_last_emotion_state(session_id, speaker)
+            if storage_utils.has_emotion_changed(last_state, summary, threshold=0.1):
                 should_trigger_coach = True
                 print(f"[DEBUG] Emotion changed for {speaker}, triggering coach")
 
@@ -350,7 +349,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
                 audio_emotions = audio_data.get("top_emotions", [])
                 video_emotions = video_data.get("top_emotions", [])
 
-                blended_label = storage.get_blended_emotion_label(
+                blended_label = storage_utils.get_blended_emotion_label(
                     video_emotions if video_emotions else audio_emotions
                 )
 
@@ -366,7 +365,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
                 await event_bus.emit_emotion(emotion_data)
 
         # Get recent transcript from disk (last 20 lines)
-        recent_transcript_data = storage.get_recent_transcript(session_id, limit=20)
+        recent_transcript_data = storage_utils.get_recent_transcript(session_id, limit=20)
         recent_transcript = "\n".join(
             [f"{entry['speaker']}: {entry['text']}" for entry in recent_transcript_data]
         )
@@ -382,7 +381,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
         # Get emotion trails for context
         emotion_context = {}
         for speaker in summaries.keys():
-            trail = storage.get_recent_emotion_trail(session_id, speaker, limit=5)
+            trail = storage_utils.get_recent_emotion_trail(session_id, speaker, limit=5)
             emotion_context[speaker] = trail
 
         # Prepare context for coach
