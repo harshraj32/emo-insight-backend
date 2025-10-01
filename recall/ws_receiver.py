@@ -302,7 +302,7 @@ import storage  # Add this import at the top
 async def process_affina_feedback(session_id, summaries, ts_str):
     """
     Send summaries to Affina coach and emit results.
-    Only triggers coach when emotions change significantly.
+    Triggers on emotion change OR every 20 seconds.
     """
     try:
         sess = event_bus.sessions.get(session_id)
@@ -318,6 +318,14 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         # Check for emotion changes and save trails
         should_trigger_coach = False
+
+        # Check time since last coach call
+        last_coach_time = sess.get("last_coach_time", 0)
+        time_since_coach = time.time() - last_coach_time
+
+        if time_since_coach >= 20:  # Force coach every 20 seconds
+            should_trigger_coach = True
+            print(f"[DEBUG] 20 seconds elapsed, forcing coach call")
 
         for speaker, summary in summaries.items():
             # Save emotion trail to disk
@@ -373,10 +381,13 @@ async def process_affina_feedback(session_id, summaries, ts_str):
         if not recent_transcript:
             recent_transcript = "[No recent conversation]"
 
-        # Only call coach if emotions changed
+        # Only call coach if emotions changed OR 20 seconds passed
         if not should_trigger_coach:
             print(f"[DEBUG] Emotions stable for {session_id}, skipping coach call")
             return
+
+        # Update last coach time
+        sess["last_coach_time"] = time.time()
 
         # Get emotion trails for context
         emotion_context = {}
@@ -425,7 +436,6 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             )
         except:
             pass
-
 
 async def fastapi_handler(websocket: WebSocket):
     """
