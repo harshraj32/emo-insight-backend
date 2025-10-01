@@ -64,7 +64,6 @@ def start_bot(meeting_url: str, session_id: str):
                         "bot.in_call_recording",
                         "bot.call_ended",
                         "bot.done",
-                        "bot.fatal",
                         # Participant events
                         "participant_events.join",
                         "participant_events.leave",

@@ -504,11 +504,6 @@ async def fastapi_handler(websocket: WebSocket):
                 sess["logs"].append("✅ Bot finished processing")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
 
-            elif evt_type == "bot.fatal":
-                sub_code = payload.get("sub_code", "unknown")
-                sess["logs"].append(f"❌ Bot error: {sub_code}")
-                await event_bus.emit_log(session_id, sess["logs"][-10:])
-
             # ===== Handle Participant Events =====
             elif evt_type == "participant_events.join":
                 participant = payload.get("participant", {})
