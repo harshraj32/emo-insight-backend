@@ -50,23 +50,18 @@ def start_bot(meeting_url: str, session_id: str):
                     "type": "websocket",
                     "url": ws_url,
                     "events": [
-                        # Media events
+                        # Media data events
                         "video_separate_png.data",
                         "audio_separate_raw.data",
                         "transcript.data",
                         "transcript.partial_data",
-                        # Bot status events
-                        "bot.joining_call",
-                        "bot.in_waiting_room",
-                        "bot.in_call_not_recording",
-                        "bot.recording_permission_allowed",
-                        "bot.recording_permission_denied",
-                        "bot.in_call_recording",
-                        "bot.call_ended",
-                        "bot.done",
-                        # Participant events
+                        # Participant events (ONLY these are allowed for real-time endpoints)
                         "participant_events.join",
                         "participant_events.leave",
+                        "participant_events.speech_on",
+                        "participant_events.speech_off",
+                        "participant_events.webcam_on",
+                        "participant_events.webcam_off",
                     ],
                 }
             ],
@@ -102,7 +97,6 @@ def start_bot(meeting_url: str, session_id: str):
     except Exception as e:
         print(f"❌ Error: {e}")
         raise
-
 def stop_bot(bot_id: str) -> None:
     """
     Stop the bot - matching test file structure.
