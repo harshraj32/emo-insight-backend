@@ -16,7 +16,7 @@ from hume import hume_client
 from affina.coach import coach_feedback
 import event_bus
 from hume.hume_summarize import summarize_hume_batch
-
+import storage
 executor = ThreadPoolExecutor(max_workers=4)
 
 AUDIO_RATE = 16000
@@ -257,9 +257,12 @@ def check_and_create_clips(session_id):
         asyncio.create_task(process_results())
 
 
+import storage  # Add this import at the top
+
 async def process_affina_feedback(session_id, summaries, ts_str):
     """
     Send summaries to Affina coach and emit results.
+    Only triggers coach when emotions change significantly.
     """
     try:
         sess = event_bus.sessions.get(session_id)
@@ -267,48 +270,89 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             print(f"⚠️ Session {session_id} not found for Affina processing")
             return
 
-        # Debug: Print what we're sending to Affina
-        print(f"\n[DEBUG] Sending to Affina:")
-        print(f"  Session: {session_id}")
-        #print(f"  Summaries: {json.dumps(summaries, indent=2)}")
-
-        # Prepare context for coach
-        context = {
-            "phase": sess.get("phase", "pitch"),
-            "objective": sess.get("objective", ""),
-            "emotions": sess.get("emotions", []),
-            "summaries": summaries,
-        }
+        sales_rep_name = sess.get("user_name", "Rep")
+        
+        # Separate sales rep from customers
+        rep_summary = None
+        customer_summaries = {}
+        
+        # Check for emotion changes and save trails
+        should_trigger_coach = False
+        
+        for speaker, summary in summaries.items():
+            # Save emotion trail to disk
+            storage.save_emotion_trail(session_id, speaker, ts_str, summary)
+            
+            # Check if emotions changed
+            last_state = storage.get_last_emotion_state(session_id, speaker)
+            if storage.has_emotion_changed(last_state, summary, threshold=0.1):
+                should_trigger_coach = True
+                print(f"[DEBUG] Emotion changed for {speaker}, triggering coach")
+            
+            # Identify role
+            if sales_rep_name.lower() in speaker.lower():
+                rep_summary = {"speaker": speaker, "data": summary}
+            else:
+                customer_summaries[speaker] = summary
+        
+        print(f"[DEBUG] Identified - Rep: {rep_summary['speaker'] if rep_summary else 'Not found'}, Customers: {list(customer_summaries.keys())}")
 
         # Emit emotion events for each speaker
         for speaker, summary in summaries.items():
             audio_data = summary.get("audio", {})
             video_data = summary.get("video", {})
 
-            # ✅ Updated to check for "ok"
             if audio_data.get("status") == "ok" or video_data.get("status") == "ok":
+                # Get blended emotion label
+                audio_emotions = audio_data.get("top_emotions", [])
+                video_emotions = video_data.get("top_emotions", [])
+                
+                blended_label = storage.get_blended_emotion_label(
+                    video_emotions if video_emotions else audio_emotions
+                )
+                
                 emotion_data = {
                     "session_id": session_id,
                     "speaker": speaker,
                     "timestamp": ts_str,
                     "audio": audio_data,
                     "video": video_data,
+                    "is_sales_rep": sales_rep_name.lower() in speaker.lower(),
+                    "blended_label": blended_label,
                 }
-                print(f"[DEBUG] Emitting emotion for {speaker}: {emotion_data}")
                 await event_bus.emit_emotion(emotion_data)
 
-        # 👉 Get transcript from summaries, not logs
-        recent_transcript = ""
-        for speaker, summary in summaries.items():
-            transcript = summary.get("audio", {}).get("transcript")
-            if transcript:
-                recent_transcript = transcript
-                break  # just take the first available transcript
-
+        # Get recent transcript from disk (last 20 lines)
+        recent_transcript_data = storage.get_recent_transcript(session_id, limit=20)
+        recent_transcript = "\n".join([
+            f"{entry['speaker']}: {entry['text']}" 
+            for entry in recent_transcript_data
+        ])
+        
         if not recent_transcript:
-            recent_transcript = f"[No transcript at {ts_str}]"
+            recent_transcript = "[No recent conversation]"
 
-        print(f"[DEBUG] Recent transcript: {recent_transcript}")
+        # Only call coach if emotions changed
+        if not should_trigger_coach:
+            print(f"[DEBUG] Emotions stable for {session_id}, skipping coach call")
+            return
+
+        # Get emotion trails for context
+        emotion_context = {}
+        for speaker in summaries.keys():
+            trail = storage.get_recent_emotion_trail(session_id, speaker, limit=5)
+            emotion_context[speaker] = trail
+
+        # Prepare context for coach
+        context = {
+            "phase": sess.get("phase", "pitch"),
+            "objective": sess.get("objective", ""),
+            "emotions": sess.get("emotions", []),
+            "sales_rep_name": sales_rep_name,
+            "rep_summary": rep_summary,
+            "customer_summaries": customer_summaries,
+            "emotion_trails": emotion_context,  # Historical context
+        }
 
         # Get coach feedback
         feedback = coach_feedback(context, recent_transcript)
@@ -321,10 +365,9 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             advice_message = str(feedback)
 
         await event_bus.emit_advice(session_id, advice_message)
-        print(f"[DEBUG] Emitted advice: {advice_message}")
 
         # Update session logs
-        sess["logs"].append(f"[{ts_str}] Processed {len(summaries)} speakers")
+        sess["logs"].append(f"[{ts_str}] Analyzed {len(summaries)} speakers")
         sess["last_hume_summary"] = summaries
         sess["last_coach_feedback"] = feedback
 
@@ -338,7 +381,6 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             await event_bus.emit_advice(session_id, f"Coach temporarily unavailable: {str(e)}")
         except:
             pass
-
 async def fastapi_handler(websocket: WebSocket):
     """
     Handle WebSocket connection from Recall bot.

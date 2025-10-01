@@ -3,128 +3,103 @@ import json
 import re
 from openai import OpenAI
 
-# Init client - Fixed env variable name
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ---------------- Affina System Prompt ----------------
 AFFINA_PROMPT = """
-You are Affina, a motivated, supportive Sales Buddy who coaches sales reps 
-in real time during Zoom or Google Meet calls. You analyze:
+You are Affina, a sales coach providing real-time guidance to sales reps during live calls.
 
-1. The sales rep's transcript and emotions (voice + face).
-2. Each customer/attendee's transcript and emotions (voice + face).
-3. The flow of the call: Pleasantries → Pitch → Q&A → Closing.
+Analyze:
+1. SALES REP's emotions and delivery
+2. CUSTOMER's reactions and engagement  
+3. Conversation flow and emotion trails over time
 
----
+CRITICAL: Coach ONLY the sales rep on what to do based on customer reactions.
 
-### Stage-Specific Emotion Weighting
+### Emotion Interpretation
+When emotions are close (within 0.05-0.07):
+- Don't force a single label
+- Describe as blended: "slight boredom with calm focus"
+- Acknowledge nuance
 
-- **Pleasantries (Opening Small Talk)**  
-  - Prioritize **voice tone** (warmth, excitement, hesitancy).  
-  - Face emotions have lower weight, only use if strongly expressive.  
+### Stage-Specific Coaching
 
-- **Pitch Phase (Rep Talking, Customer Listening)**  
-  - Prioritize **customer face reactions** (confusion, boredom, trust).  
-  - Use customer voice as supporting evidence.  
-  - Rep delivery tone matters (energy, clarity).  
-
-- **Q&A Phase (Customer Asking Questions)**  
-  - Treat **voice and face equally** (tone + expression both matter).  
-  - Focus on whether the rep's answers land or not.  
-
-- **Closing Phase (End of Call)**  
-  - Prioritize **voice** (confidence, warmth, clarity).  
-  - Face is secondary (if they look disengaged, call it out).  
-
----
-
-### Call Flow & Feedback Rules
-
-1. Pleasantries  
-   - Rep excited + customer receptive → "You started this off great…"  
-   - Rep flat/confused → "Energy's low, bring more warmth so they open up."  
-
-2. Pitch Phase  
-   - Customer confused → "They looked lost – slow it down and clarify."  
-   - Customer bored → "They're drifting – add a story or engage them."  
-   - Customer concentrating → "They're locked in – guide step by step."  
-   - Customer doubtful → "They're skeptical – back it with proof."  
-   - Customer trusting → "They're vibing – lean into rapport."  
-
-3. Q&A Phase  
-   - Customer satisfied → "That answer landed – good job."  
-   - Customer doubtful → "They didn't fully buy it – reinforce with proof."  
-   - Customer confused → "They're still unclear – simplify your response."  
-
-4. Closing Phase  
-   - Customer positive → "They're interested – push for next steps."  
-   - Customer mixed → "Not fully sold yet – recap value before closing."  
-   - Customer disengaged → "They tuned out – tighten your close, ask perspective."  
-
----
+**Pleasantries**: Voice warmth, energy, rapport building
+**Pitch**: Focus on customer reactions (face + voice)
+  - Confused → "Slow down and clarify"
+  - Bored → "Add story or ask question"
+  - Interested → "Keep this energy"
+**Q&A**: Check if answers land well
+**Closing**: Guide on when to push vs back off
 
 ### Output Format
-Always output in JSON with:
-- "stage" → Pleasantries | Pitch | Q&A | Closing  
-- "speaker" → "Rep" or "Customer(s)"  
-- "transcript_snippet" → latest text said (if available)  
-- "dominant_channel" → "voice", "face", or "balanced"  
-- "top_emotion" → strongest emotion detected (after weighting)  
-- "recommendation" → 1–2 sentence actionable coaching advice  
+{
+  "stage": "Pleasantries|Pitch|Q&A|Closing",
+  "sales_rep_state": "brief emotional state description",
+  "customer_state": "brief reaction description",
+  "emotion_trend": "stable|improving|declining",
+  "recommendation": "1-2 actionable sentences"
+}
 
-IMPORTANT: Output ONLY valid JSON, no markdown code blocks, no extra text.
+Output ONLY valid JSON, no markdown.
 """
 
-# ---------------- Function ----------------
-def coach_feedback(context: dict, transcript_line: str) -> dict:
+def coach_feedback(context: dict, transcript: str) -> dict:
     """
-    Calls ChatGPT with the Hume multi-speaker summaries + transcript snippet
-    and returns Affina's structured JSON coaching feedback.
-
-    context keys:
-      - phase: str
-      - objective: str
-      - emotions: list[str] (emotions to track)
-      - summaries: dict { "rep": {...}, "customer1": {...}, ... }
+    Provide coaching with emotion trails and conversation history.
     """
+    
+    sales_rep_name = context.get("sales_rep_name", "Rep")
+    rep_summary = context.get("rep_summary")
+    customer_summaries = context.get("customer_summaries", {})
+    emotion_trails = context.get("emotion_trails", {})
 
-    # Check if we have any valid emotion data
+    # Check for valid data
     has_valid_data = False
-    for speaker, summary in context.get("summaries", {}).items():
-        audio_emotions = summary.get("audio", {}).get("top_emotions")
-        video_emotions = summary.get("video", {}).get("top_emotions")
-        if audio_emotions or video_emotions:
+    
+    if rep_summary and rep_summary.get("data"):
+        rep_data = rep_summary["data"]
+        if rep_data.get("audio", {}).get("top_emotions") or rep_data.get("video", {}).get("top_emotions"):
+            has_valid_data = True
+    
+    for speaker, summary in customer_summaries.items():
+        if summary.get("audio", {}).get("top_emotions") or summary.get("video", {}).get("top_emotions"):
             has_valid_data = True
             break
     
-    # If no valid data, return a default response
     if not has_valid_data:
         return {
             "stage": context.get("phase", "Pleasantries").title(),
-            "speaker": "System",
-            "transcript_snippet": transcript_line[:100] if transcript_line else "No transcript",
-            "dominant_channel": "none",
-            "top_emotion": "No data",
-            "recommendation": "Waiting for emotion data. Make sure the bot is in the meeting and participants have their cameras/mics on."
+            "sales_rep_state": "No data",
+            "customer_state": "No data",
+            "emotion_trend": "unknown",
+            "recommendation": "Waiting for emotion data. Ensure cameras/mics are on."
         }
 
+    # Format emotion trails for context
+    trails_summary = {}
+    for speaker, trail in emotion_trails.items():
+        if trail:
+            trails_summary[speaker] = f"Last {len(trail)} states tracked"
+
     user_prompt = f"""
-    Here is the latest Hume analysis (multi-speaker) and transcript snippet.
+Meeting Context:
+- Phase: {context.get("phase")}
+- Objective: {context.get("objective")}
+- Sales Rep: {sales_rep_name}
 
-    Meeting context:
-    - Phase: {context.get("phase")}
-    - Objective: {context.get("objective")}
-    - Selected Emotions: {context.get("emotions")}
+SALES REP ({rep_summary['speaker'] if rep_summary else 'Unknown'}):
+Current State: {json.dumps(rep_summary.get('data', {}) if rep_summary else {}, indent=2)}
+Emotion Trail: {trails_summary.get(rep_summary['speaker'] if rep_summary else '', 'No history')}
 
-    Multi-speaker summaries:
-    {json.dumps(context.get("summaries", {}), indent=2)}
+CUSTOMERS:
+{json.dumps({k: {"current": v, "trail": trails_summary.get(k, 'No history')} for k, v in customer_summaries.items()}, indent=2)}
 
-    Transcript snippet:
-    "{transcript_line}"
+Recent Conversation (last 20 exchanges):
+{transcript}
 
-    Provide coaching feedback in JSON only, using the format defined above.
-    Output ONLY the JSON object, no markdown code blocks, no extra text.
-    """
+Provide coaching for {sales_rep_name} based on customer reactions and emotion trends.
+Output ONLY JSON, no markdown.
+"""
 
     try:
         response = client.chat.completions.create(
@@ -134,58 +109,54 @@ def coach_feedback(context: dict, transcript_line: str) -> dict:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.6,
-            max_tokens=300,
+            max_tokens=350,
         )
 
         content = response.choices[0].message.content.strip()
         
-        # Clean up the response - remove markdown code blocks if present
+        # Clean markdown
         if "```json" in content:
-            # Extract JSON from markdown code block
             json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
             if json_match:
                 content = json_match.group(1)
         elif "```" in content:
-            # Remove any other code blocks
             content = re.sub(r'```.*?```', '', content, flags=re.DOTALL).strip()
         
-        # Try to parse the JSON
         try:
             result = json.loads(content)
-            # Ensure we have the required fields
             if "recommendation" not in result:
-                result["recommendation"] = "Keep engaging with your audience."
+                result["recommendation"] = "Keep engaging naturally."
             return result
         except json.JSONDecodeError as e:
-            print(f"[DEBUG] Failed to parse coach JSON: {e}")
-            print(f"[DEBUG] Raw content: {content[:500]}")
+            print(f"[DEBUG] JSON parse failed: {e}")
+            print(f"[DEBUG] Raw: {content[:500]}")
             
-            # Try to extract just the recommendation if JSON parsing fails
             if "recommendation" in content:
                 match = re.search(r'"recommendation"\s*:\s*"([^"]*)"', content)
                 if match:
                     return {
                         "recommendation": match.group(1),
                         "stage": context.get("phase", "Unknown"),
-                        "speaker": "Unknown",
-                        "transcript_snippet": transcript_line[:100] if transcript_line else "",
-                        "dominant_channel": "unknown",
-                        "top_emotion": "Processing"
+                        "sales_rep_state": "Processing",
+                        "customer_state": "Processing",
+                        "emotion_trend": "unknown"
                     }
             
-            # Fallback response
             return {
-                "recommendation": "Keep the conversation flowing naturally.",
+                "recommendation": "Keep the conversation flowing.",
                 "stage": context.get("phase", "Unknown"),
-                "speaker": "Rep",
-                "transcript_snippet": transcript_line[:100] if transcript_line else "",
-                "dominant_channel": "unknown",
-                "top_emotion": "Processing"
+                "sales_rep_state": "Processing",
+                "customer_state": "Processing",
+                "emotion_trend": "unknown"
             }
             
     except Exception as e:
         print(f"[DEBUG] Coach error: {e}")
         return {
-            "recommendation": "Stay focused on your meeting objective.",
+            "recommendation": "Focus on your meeting objective.",
+            "stage": context.get("phase", "Unknown"),
+            "sales_rep_state": "Error",
+            "customer_state": "Error",
+            "emotion_trend": "unknown",
             "error": str(e)
         }
