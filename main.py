@@ -6,8 +6,7 @@ from typing import Dict, Any
 import os
 from fastapi import FastAPI, Body, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi_socketio import SocketManager
-import requests
+import socketio
 from config import settings
 from recall import bot_manager
 import event_bus
@@ -20,27 +19,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("emo-insight")
 
-# ===== FastAPI + Socket.IO =====
+# ===== FastAPI =====
 app = FastAPI(title="SalesBuddy Backend", version="1.0.0")
-
-# For Render deployment - allow all origins or specify your frontend URL
-cors_origins = os.getenv("FRONTEND_ORIGIN", "*").split(",")
-socket_manager = SocketManager(app, cors_allowed_origins=cors_origins)
 
 # ===== CORS =====
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow everything
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ===== Socket.IO with python-socketio =====
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*',
+    logger=True,
+    engineio_logger=True
+)
+
+socket_app = socketio.ASGIApp(sio, app)
+
 # ===== Root route (health/debug) =====
 @app.get("/")
 def root():
     return {"status": "running", "message": "Emo Insight Backend is alive!"}
-
 
 # ===== Middleware: log every HTTP request =====
 @app.middleware("http")
@@ -55,14 +59,17 @@ sessions: Dict[str, Dict[str, Any]] = event_bus.sessions
 
 # ===== Wire event bus emitters to Socket.IO =====
 async def _emit_advice(session_id: str, advice: str):
-    await socket_manager.emit("affina_advice", {"session_id": session_id, "advice": advice}, room=session_id)
+    await sio.emit("affina_advice", {"session_id": session_id, "advice": advice}, room=session_id)
+    logger.info(f"📢 Emitted advice to session {session_id}")
 
 async def _emit_emotion(payload: Dict[str, Any]):
     sid = payload.get("session_id")
-    await socket_manager.emit("emotion_detected", payload, room=sid or None)
+    await sio.emit("emotion_detected", payload, room=sid)
+    logger.info(f"📢 Emitted emotion to session {sid}")
 
 async def _emit_log(session_id: str, logs: list):
-    await socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+    await sio.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+    logger.info(f"📢 Emitted logs to session {session_id}: {len(logs)} logs")
 
 event_bus.emit_advice = _emit_advice
 event_bus.emit_emotion = _emit_emotion
@@ -74,21 +81,33 @@ async def websocket_endpoint(websocket: WebSocket):
     await fastapi_handler(websocket)
 
 # ===== Socket.IO Events =====
-@socket_manager.on("join_session")
+@sio.event
+async def connect(sid, environ):
+    logger.info(f"🔌 Client connected: {sid}")
+
+@sio.event
+async def disconnect(sid):
+    logger.info(f"🔌 Client disconnected: {sid}")
+
+@sio.event
 async def join_session(sid, data):
-    session_id = (data or {}).get("session_id")
+    session_id = data.get("session_id")
+    logger.info(f"🔗 join_session request from {sid} for session {session_id}")
+    logger.info(f"Available sessions: {list(sessions.keys())}")
+    
     if session_id in sessions:
-        await socket_manager.enter_room(sid, session_id)
+        await sio.enter_room(sid, session_id)
         logs = sessions[session_id].get("logs", [])[-10:]
-        await socket_manager.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
+        await sio.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
         logger.info(f"🔗 Client {sid} joined session {session_id}")
     else:
         logger.warning(f"⚠️ join_session: Unknown session {session_id}")
+        await sio.emit("error", {"message": f"Session {session_id} not found"}, to=sid)
 
-@socket_manager.on("recall_event")
+@sio.event
 async def recall_event(sid, data):
     """Relay Recall.ai events to logs."""
-    session_id = (data or {}).get("session_id")
+    session_id = data.get("session_id")
     if not session_id or session_id not in sessions:
         logger.warning(f"⚠️ recall_event: Unknown session {session_id}")
         return
