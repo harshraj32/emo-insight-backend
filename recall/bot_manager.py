@@ -20,34 +20,27 @@ headers = {
 
 def start_bot(meeting_url: str, session_id: str):
     """
-    Start the meeting bot with Recall - matching the test file structure exactly.
+    Start the meeting bot with Recall.
     """
     
-    # Build WebSocket URL carefully
-    # RENDER_EXTERNAL_URL should be just the domain like "emo-insight-backend.onrender.com"
     if os.getenv("RENDER_EXTERNAL_URL"):
-        # Clean the URL - remove any protocol if accidentally included
         render_url = os.getenv("RENDER_EXTERNAL_URL")
         render_url = render_url.replace("https://", "").replace("http://", "").replace("wss://", "").replace("ws://", "")
         ws_url = f"wss://{render_url}/ws?session_id={session_id}"
     else:
-        # Fallback for local development
         ws_url = f"wss://emo-insight-backend.onrender.com/ws?session_id={session_id}"
     
-    # Log what we're about to send
     print(f"➡️ creating bot...")
     print(f"   Meeting URL: {meeting_url}")
     print(f"   WebSocket URL: {ws_url}")
     print(f"   Session ID: {session_id}")
-    print(f"   API Endpoint: {BASE}/bot")
     
-    # Match the exact payload structure from the test file
     payload = {
         "meeting_url": meeting_url,
         "recording_config": {
             "video_mixed_layout": "gallery_view_v2",
-            "video_separate_png": {},   # 2fps PNG frames
-            "audio_separate_raw": {},   # 16kHz PCM S16LE mono, per participant
+            "video_separate_png": {},
+            "audio_separate_raw": {},
             "transcript": {
                 "provider": {"recallai_streaming": {}},
                 "diarization": {"use_separate_streams_when_available": True},
@@ -57,23 +50,35 @@ def start_bot(meeting_url: str, session_id: str):
                     "type": "websocket",
                     "url": ws_url,
                     "events": [
+                        # Media events
                         "video_separate_png.data",
                         "audio_separate_raw.data",
                         "transcript.data",
                         "transcript.partial_data",
+                        # Bot status events
+                        "bot.joining_call",
+                        "bot.in_waiting_room",
+                        "bot.in_call_not_recording",
+                        "bot.recording_permission_allowed",
+                        "bot.recording_permission_denied",
+                        "bot.in_call_recording",
+                        "bot.call_ended",
+                        "bot.done",
+                        "bot.fatal",
+                        # Participant events
+                        "participant_events.join",
+                        "participant_events.leave",
                     ],
                 }
             ],
         },
     }
     
-    # Make the request - exactly like the test file
     try:
         r = requests.post(f"{BASE}/bot", headers=headers, json=payload, timeout=30)
         print("status:", r.status_code)
         print("resp:", r.text)
         
-        # If 400, show the exact error
         if r.status_code == 400:
             print("❌ Bad Request Details:")
             try:
@@ -86,7 +91,6 @@ def start_bot(meeting_url: str, session_id: str):
         bot = r.json()
         print("✅ bot created:", json.dumps(bot, indent=2))
         
-        # Return the bot ID
         bot_id = bot.get("id") or bot.get("bot_id")
         if not bot_id:
             raise RuntimeError(f"No bot ID in response: {bot}")

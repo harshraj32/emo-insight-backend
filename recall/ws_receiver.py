@@ -342,6 +342,160 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 async def fastapi_handler(websocket: WebSocket):
     """
     Handle WebSocket connection from Recall bot.
+    Receives real-time bot status, participant events, and media data.
+    """
+    await websocket.accept()
+    
+    session_id = websocket.query_params.get("session_id")
+    
+    if not session_id:
+        print("⚠️ WebSocket connected without session_id")
+        await websocket.close(code=1008, reason="Missing session_id")
+        return
+    
+    sess = event_bus.sessions.get(session_id)
+    if not sess:
+        print(f"⚠️ Unknown session_id: {session_id}")
+        await websocket.close(code=1008, reason="Unknown session")
+        return
+    
+    print(f"✅ Recall bot connected for session {session_id}")
+    sess["logs"].append("Recall bot connected")
+    await event_bus.emit_log(session_id, sess["logs"][-10:])
+    
+    # Start clip processing timer
+    async def clip_timer():
+        while True:
+            await asyncio.sleep(1.0)
+            check_and_create_clips(session_id)
+    
+    clip_task = asyncio.create_task(clip_timer())
+    
+    try:
+        while True:
+            message = await websocket.receive_text()
+            
+            try:
+                msg = json.loads(message)
+            except json.JSONDecodeError:
+                continue
+            
+            evt_type = msg.get("event")
+            data_wrapper = msg.get("data", {})
+            payload = data_wrapper.get("data", {})
+            
+            # ===== Handle Bot Status Events =====
+            if evt_type == "bot.joining_call":
+                sess["logs"].append("🤖 Bot is joining the meeting...")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.in_waiting_room":
+                sess["logs"].append("🚪 Bot is in waiting room - PLEASE ADMIT IT!")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.in_call_not_recording":
+                sess["logs"].append("✅ Bot admitted to meeting (not recording yet)")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.recording_permission_allowed":
+                sess["logs"].append("✅ Recording permission granted")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.in_call_recording":
+                sess["logs"].append("🎥 Recording started - analyzing participants...")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.recording_permission_denied":
+                sess["logs"].append("⚠️ Recording permission denied by host")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.call_ended":
+                sess["logs"].append("📞 Bot left the call")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.done":
+                sess["logs"].append("✅ Bot finished processing")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "bot.fatal":
+                sub_code = payload.get("sub_code", "unknown")
+                sess["logs"].append(f"❌ Bot error: {sub_code}")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+            
+            # ===== Handle Participant Events =====
+            elif evt_type == "participant_events.join":
+                participant = payload.get("participant", {})
+                name = participant.get("name", "Unknown participant")
+                sess["logs"].append(f"👤 {name} joined the meeting")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+                
+            elif evt_type == "participant_events.leave":
+                participant = payload.get("participant", {})
+                name = participant.get("name", "Unknown participant")
+                sess["logs"].append(f"👋 {name} left the meeting")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+            
+            # ===== Handle Media Data Events =====
+            participant = payload.get("participant", {})
+            speaker = participant.get("name") or f"ID-{participant.get('id')}"
+            ts_now = time.time()
+            participant_key = f"{session_id}_{speaker}"
+            
+            if evt_type == "video_separate_png.data":
+                buf_b64 = payload.get("buffer")
+                if buf_b64:
+                    participant_data[participant_key]["frames"].append((buf_b64, ts_now))
+            
+            elif evt_type == "audio_separate_raw.data":
+                buf_b64 = payload.get("buffer", "")
+                rel_ts = payload.get("timestamp", {}).get("relative")
+
+                if buf_b64 and rel_ts is not None:
+                    pcm_bytes = base64.b64decode(buf_b64)
+                    data = participant_data[participant_key]
+
+                    # Gap fill
+                    if data["last_audio_ts"] is not None:
+                        expected_samples = int((rel_ts - data["last_audio_ts"]) * AUDIO_RATE)
+                        gap = expected_samples - (len(pcm_bytes) // SAMPLE_WIDTH)
+                        if gap > 0:
+                            data["audio_buffer"].extend(b"\x00" * gap * SAMPLE_WIDTH)
+
+                    data["audio_buffer"].extend(pcm_bytes)
+                    data["last_audio_ts"] = rel_ts
+            
+            elif evt_type in ["transcript.data", "transcript.partial_data"]:
+                words = [w.get("text", "") for w in payload.get("words", [])]
+                text = " ".join(words).strip()
+                
+                if text:
+                    is_partial = evt_type == "transcript.partial_data"
+                    log_entry = f"{'[Partial] ' if is_partial else ''}{speaker}: {text[:150]}"
+                    sess["logs"].append(log_entry)
+                    
+                    # Only emit non-partial transcripts
+                    if not is_partial:
+                        print(f"📝 {speaker}: {text}")
+                        await event_bus.emit_log(session_id, sess["logs"][-10:])
+    
+    except Exception as e:
+        print(f"❌ WebSocket error: {e}")
+        sess["logs"].append(f"WebSocket error: {str(e)}")
+        await event_bus.emit_log(session_id, sess["logs"][-10:])
+    
+    finally:
+        clip_task.cancel()
+        
+        # Cleanup participant data
+        session_prefix = f"{session_id}_"
+        keys_to_remove = [k for k in participant_data.keys() if k.startswith(session_prefix)]
+        for key in keys_to_remove:
+            del participant_data[key]
+        
+        print(f"🔌 WebSocket disconnected for session {session_id}")
+        await websocket.close()
+    """
+    Handle WebSocket connection from Recall bot.
     """
     await websocket.accept()
     
