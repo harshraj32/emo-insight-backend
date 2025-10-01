@@ -10,7 +10,6 @@ dnspython==2.8.0
 dotenv==0.9.9
 eventlet==0.33.3
 fastapi==0.117.1
-fastapi-socketio==0.0.10
 Flask==2.3.3
 Flask-Cors==4.0.0
 Flask-SocketIO==5.3.5
