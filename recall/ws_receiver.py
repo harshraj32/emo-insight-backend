@@ -2,21 +2,22 @@ import asyncio
 import base64
 import datetime
 import json
+import logging
 import os
 import subprocess
 import time
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import logging
+
 logger = logging.getLogger(__name__)
-from fastapi import WebSocket
-from config import settings
-from hume import hume_client
-from affina.coach import coach_feedback
 import event_bus
+from affina.coach import coach_feedback
+from config import settings, storage
+from fastapi import WebSocket
+from hume import hume_client
 from hume.hume_summarize import summarize_hume_batch
-import storage
+
 executor = ThreadPoolExecutor(max_workers=4)
 
 AUDIO_RATE = 16000
@@ -36,12 +37,14 @@ participant_data = defaultdict(
     }
 )
 
+
 def safe_summary(data):
     """Ensure data is JSON-serializable"""
     try:
         return json.loads(json.dumps(data))
     except Exception as e:
         return {"error": f"serialization failed: {e}"}
+
 
 def create_clips_for_all_sync(session_id, participants_data, start, end):
     """
@@ -62,8 +65,12 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
         )
 
         # Create unique clip names
-        audio_clip_path = os.path.join(session_dir, f"{clean_speaker}_{ts_str}_audio.wav")
-        video_clip_path = os.path.join(session_dir, f"{clean_speaker}_{ts_str}_video.mp4")
+        audio_clip_path = os.path.join(
+            session_dir, f"{clean_speaker}_{ts_str}_audio.wav"
+        )
+        video_clip_path = os.path.join(
+            session_dir, f"{clean_speaker}_{ts_str}_video.mp4"
+        )
         temp_dir = os.path.join(session_dir, f"tmp_{clean_speaker}_{ts_str}")
 
         os.makedirs(temp_dir, exist_ok=True)
@@ -81,12 +88,18 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                 try:
                     subprocess.run(
                         [
-                            "ffmpeg", "-y",
-                            "-f", "s16le",
-                            "-ar", str(AUDIO_RATE),
-                            "-ac", str(CHANNELS),
-                            "-i", raw_path,
-                            "-t", str(CLIP_LEN),
+                            "ffmpeg",
+                            "-y",
+                            "-f",
+                            "s16le",
+                            "-ar",
+                            str(AUDIO_RATE),
+                            "-ac",
+                            str(CHANNELS),
+                            "-i",
+                            raw_path,
+                            "-t",
+                            str(CLIP_LEN),
                             audio_clip_path,
                         ],
                         check=True,
@@ -94,12 +107,17 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                         text=True,
                     )
 
-                    if os.path.exists(audio_clip_path) and os.path.getsize(audio_clip_path) > 0:
+                    if (
+                        os.path.exists(audio_clip_path)
+                        and os.path.getsize(audio_clip_path) > 0
+                    ):
                         audio_results = hume_client.process_clip(
                             Path(audio_clip_path),
                             models={"prosody": {"granularity": "utterance"}},
                         )
-                        print(f"✅ Audio processed for {clean_speaker}: {os.path.getsize(audio_clip_path)} bytes")
+                        print(
+                            f"✅ Audio processed for {clean_speaker}: {os.path.getsize(audio_clip_path)} bytes"
+                        )
 
                         if isinstance(audio_results, list):
                             audio_results = audio_results[0]
@@ -125,12 +143,18 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                 try:
                     subprocess.run(
                         [
-                            "ffmpeg", "-y",
-                            "-framerate", str(FPS),
-                            "-i", frame_pattern,
-                            "-t", str(CLIP_LEN),
-                            "-c:v", "libx264",
-                            "-pix_fmt", "yuv420p",
+                            "ffmpeg",
+                            "-y",
+                            "-framerate",
+                            str(FPS),
+                            "-i",
+                            frame_pattern,
+                            "-t",
+                            str(CLIP_LEN),
+                            "-c:v",
+                            "libx264",
+                            "-pix_fmt",
+                            "yuv420p",
                             video_clip_path,
                         ],
                         check=True,
@@ -138,12 +162,17 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                         text=True,
                     )
 
-                    if os.path.exists(video_clip_path) and os.path.getsize(video_clip_path) > 0:
+                    if (
+                        os.path.exists(video_clip_path)
+                        and os.path.getsize(video_clip_path) > 0
+                    ):
                         video_results = hume_client.process_clip(
                             Path(video_clip_path),
                             models={"face": {"fps_pred": 3}},
                         )
-                        print(f"✅ Video processed for {clean_speaker}: {frame_count} frames")
+                        print(
+                            f"✅ Video processed for {clean_speaker}: {frame_count} frames"
+                        )
 
                         if isinstance(video_results, list):
                             video_results = video_results[0]
@@ -176,48 +205,54 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
         finally:
             if os.path.exists(temp_dir):
                 subprocess.run(["rm", "-rf", temp_dir], capture_output=True)
-    
+
     return summaries, ts_str
+
+
 def check_and_create_clips(session_id):
     """
     Check if it's time to create clips for participants in this session.
     """
     now = time.time()
     participants_to_process = {}
-    
+
     # Find all participants for this session
     session_prefix = f"{session_id}_"
-    
+
     for key, data in list(participant_data.items()):
         if not key.startswith(session_prefix):
             continue
-            
+
         # Extract speaker name from key
-        speaker = key[len(session_prefix):]
-        
+        speaker = key[len(session_prefix) :]
+
         # Initialize timing if needed
         if data["start_time"] is None:
             data["start_time"] = now
             data["last_clip_time"] = now
             continue
-        
+
         # Check if it's time to create a clip
         time_since_last = now - data["last_clip_time"]
         if time_since_last >= CLIP_LEN:
             clip_start = data["last_clip_time"]
             clip_end = now
-            
+
             # Collect data for this time window
-            relevant_frames = [(f, t) for f, t in data["frames"] if clip_start <= t <= clip_end]
-            
+            relevant_frames = [
+                (f, t) for f, t in data["frames"] if clip_start <= t <= clip_end
+            ]
+
             # Only process if we have data
             if relevant_frames or len(data["audio_buffer"]) > 0:
                 participants_to_process[speaker] = {
                     "frames": list(relevant_frames),
                     "audio_buffer": bytes(data["audio_buffer"]),
                 }
-                print(f"📊 Queuing {speaker}: {len(relevant_frames)} frames, {len(data['audio_buffer'])} audio bytes")
-            
+                print(
+                    f"📊 Queuing {speaker}: {len(relevant_frames)} frames, {len(data['audio_buffer'])} audio bytes"
+                )
+
             # Reset buffers for next clip
             data["frames"].clear()
             data["audio_buffer"].clear()
@@ -227,11 +262,11 @@ def check_and_create_clips(session_id):
     # Process clips if we have any
     if participants_to_process:
         print(f"🎬 Processing clips for {len(participants_to_process)} participants")
-        
+
         # Run clip creation in executor
         loop = asyncio.get_running_loop()
         clip_start_time = now - CLIP_LEN
-        
+
         # Create future for processing
         future = loop.run_in_executor(
             executor,
@@ -239,25 +274,29 @@ def check_and_create_clips(session_id):
             session_id,
             participants_to_process,
             clip_start_time,
-            now
+            now,
         )
-        
+
         # Handle results asynchronously
         async def process_results():
             try:
                 summaries, ts_str = await future
                 if summaries:
-                    print(f"🎯 Got summaries for {len(summaries)} participants at {ts_str}")
+                    print(
+                        f"🎯 Got summaries for {len(summaries)} participants at {ts_str}"
+                    )
                     await process_affina_feedback(session_id, summaries, ts_str)
             except Exception as e:
                 print(f"❌ Error processing clips: {e}")
                 import traceback
+
                 traceback.print_exc()
-        
+
         asyncio.create_task(process_results())
 
 
 import storage  # Add this import at the top
+
 
 async def process_affina_feedback(session_id, summaries, ts_str):
     """
@@ -271,31 +310,33 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             return
 
         sales_rep_name = sess.get("user_name", "Rep")
-        
+
         # Separate sales rep from customers
         rep_summary = None
         customer_summaries = {}
-        
+
         # Check for emotion changes and save trails
         should_trigger_coach = False
-        
+
         for speaker, summary in summaries.items():
             # Save emotion trail to disk
             storage.save_emotion_trail(session_id, speaker, ts_str, summary)
-            
+
             # Check if emotions changed
             last_state = storage.get_last_emotion_state(session_id, speaker)
             if storage.has_emotion_changed(last_state, summary, threshold=0.1):
                 should_trigger_coach = True
                 print(f"[DEBUG] Emotion changed for {speaker}, triggering coach")
-            
+
             # Identify role
             if sales_rep_name.lower() in speaker.lower():
                 rep_summary = {"speaker": speaker, "data": summary}
             else:
                 customer_summaries[speaker] = summary
-        
-        print(f"[DEBUG] Identified - Rep: {rep_summary['speaker'] if rep_summary else 'Not found'}, Customers: {list(customer_summaries.keys())}")
+
+        print(
+            f"[DEBUG] Identified - Rep: {rep_summary['speaker'] if rep_summary else 'Not found'}, Customers: {list(customer_summaries.keys())}"
+        )
 
         # Emit emotion events for each speaker
         for speaker, summary in summaries.items():
@@ -306,11 +347,11 @@ async def process_affina_feedback(session_id, summaries, ts_str):
                 # Get blended emotion label
                 audio_emotions = audio_data.get("top_emotions", [])
                 video_emotions = video_data.get("top_emotions", [])
-                
+
                 blended_label = storage.get_blended_emotion_label(
                     video_emotions if video_emotions else audio_emotions
                 )
-                
+
                 emotion_data = {
                     "session_id": session_id,
                     "speaker": speaker,
@@ -324,11 +365,10 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         # Get recent transcript from disk (last 20 lines)
         recent_transcript_data = storage.get_recent_transcript(session_id, limit=20)
-        recent_transcript = "\n".join([
-            f"{entry['speaker']}: {entry['text']}" 
-            for entry in recent_transcript_data
-        ])
-        
+        recent_transcript = "\n".join(
+            [f"{entry['speaker']}: {entry['text']}" for entry in recent_transcript_data]
+        )
+
         if not recent_transcript:
             recent_transcript = "[No recent conversation]"
 
@@ -376,118 +416,125 @@ async def process_affina_feedback(session_id, summaries, ts_str):
     except Exception as e:
         print(f"❌ Error in Affina processing: {e}")
         import traceback
+
         traceback.print_exc()
         try:
-            await event_bus.emit_advice(session_id, f"Coach temporarily unavailable: {str(e)}")
+            await event_bus.emit_advice(
+                session_id, f"Coach temporarily unavailable: {str(e)}"
+            )
         except:
             pass
+
+
 async def fastapi_handler(websocket: WebSocket):
     """
     Handle WebSocket connection from Recall bot.
     Receives real-time bot status, participant events, and media data.
     """
     await websocket.accept()
-    
+
     session_id = websocket.query_params.get("session_id")
-    
+
     if not session_id:
         print("⚠️ WebSocket connected without session_id")
         await websocket.close(code=1008, reason="Missing session_id")
         return
-    
+
     sess = event_bus.sessions.get(session_id)
     if not sess:
         print(f"⚠️ Unknown session_id: {session_id}")
         await websocket.close(code=1008, reason="Unknown session")
         return
-    
+
     print(f"✅ Recall bot connected for session {session_id}")
     sess["logs"].append("Recall bot connected")
     await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
+
     # Start clip processing timer
     async def clip_timer():
         while True:
             await asyncio.sleep(1.0)
             check_and_create_clips(session_id)
-    
+
     clip_task = asyncio.create_task(clip_timer())
-    
+
     try:
         while True:
             message = await websocket.receive_text()
-            
+
             try:
                 msg = json.loads(message)
             except json.JSONDecodeError:
                 continue
-            
+
             evt_type = msg.get("event")
             data_wrapper = msg.get("data", {})
             payload = data_wrapper.get("data", {})
-            
+
             # ===== Handle Bot Status Events =====
             if evt_type == "bot.joining_call":
                 sess["logs"].append("🤖 Bot is joining the meeting...")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.in_waiting_room":
                 sess["logs"].append("🚪 Bot is in waiting room - PLEASE ADMIT IT!")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.in_call_not_recording":
                 sess["logs"].append("✅ Bot admitted to meeting (not recording yet)")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.recording_permission_allowed":
                 sess["logs"].append("✅ Recording permission granted")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.in_call_recording":
                 sess["logs"].append("🎥 Recording started - analyzing participants...")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.recording_permission_denied":
                 sess["logs"].append("⚠️ Recording permission denied by host")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.call_ended":
                 sess["logs"].append("📞 Bot left the call")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.done":
                 sess["logs"].append("✅ Bot finished processing")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "bot.fatal":
                 sub_code = payload.get("sub_code", "unknown")
                 sess["logs"].append(f"❌ Bot error: {sub_code}")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-            
+
             # ===== Handle Participant Events =====
             elif evt_type == "participant_events.join":
                 participant = payload.get("participant", {})
                 name = participant.get("name", "Unknown participant")
                 sess["logs"].append(f"👤 {name} joined the meeting")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-                
+
             elif evt_type == "participant_events.leave":
                 participant = payload.get("participant", {})
                 name = participant.get("name", "Unknown participant")
                 sess["logs"].append(f"👋 {name} left the meeting")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
-            
+
             # ===== Handle Media Data Events =====
             participant = payload.get("participant", {})
             speaker = participant.get("name") or f"ID-{participant.get('id')}"
             ts_now = time.time()
             participant_key = f"{session_id}_{speaker}"
-            
+
             if evt_type == "video_separate_png.data":
                 buf_b64 = payload.get("buffer")
                 if buf_b64:
-                    participant_data[participant_key]["frames"].append((buf_b64, ts_now))
-            
+                    participant_data[participant_key]["frames"].append(
+                        (buf_b64, ts_now)
+                    )
+
             elif evt_type == "audio_separate_raw.data":
                 buf_b64 = payload.get("buffer", "")
                 rel_ts = payload.get("timestamp", {}).get("relative")
@@ -498,103 +545,111 @@ async def fastapi_handler(websocket: WebSocket):
 
                     # Gap fill
                     if data["last_audio_ts"] is not None:
-                        expected_samples = int((rel_ts - data["last_audio_ts"]) * AUDIO_RATE)
+                        expected_samples = int(
+                            (rel_ts - data["last_audio_ts"]) * AUDIO_RATE
+                        )
                         gap = expected_samples - (len(pcm_bytes) // SAMPLE_WIDTH)
                         if gap > 0:
                             data["audio_buffer"].extend(b"\x00" * gap * SAMPLE_WIDTH)
 
                     data["audio_buffer"].extend(pcm_bytes)
                     data["last_audio_ts"] = rel_ts
-            
+
             elif evt_type in ["transcript.data", "transcript.partial_data"]:
                 words = [w.get("text", "") for w in payload.get("words", [])]
                 text = " ".join(words).strip()
-                
+
                 if text:
                     is_partial = evt_type == "transcript.partial_data"
-                    log_entry = f"{'[Partial] ' if is_partial else ''}{speaker}: {text[:150]}"
+                    log_entry = (
+                        f"{'[Partial] ' if is_partial else ''}{speaker}: {text[:150]}"
+                    )
                     sess["logs"].append(log_entry)
-                    
+
                     # Only emit non-partial transcripts
                     if not is_partial:
                         print(f"📝 {speaker}: {text}")
                         await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
+
     except Exception as e:
         print(f"❌ WebSocket error: {e}")
         sess["logs"].append(f"WebSocket error: {str(e)}")
         await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
+
     finally:
         clip_task.cancel()
-        
+
         # Cleanup participant data
         session_prefix = f"{session_id}_"
-        keys_to_remove = [k for k in participant_data.keys() if k.startswith(session_prefix)]
+        keys_to_remove = [
+            k for k in participant_data.keys() if k.startswith(session_prefix)
+        ]
         for key in keys_to_remove:
             del participant_data[key]
-        
+
         print(f"🔌 WebSocket disconnected for session {session_id}")
         await websocket.close()
     """
     Handle WebSocket connection from Recall bot.
     """
     await websocket.accept()
-    
+
     # Get session_id from query params
     session_id = websocket.query_params.get("session_id")
-    
+
     if not session_id:
         print("⚠️ WebSocket connected without session_id")
         await websocket.close(code=1008, reason="Missing session_id")
         return
-    
+
     # Verify session exists
     sess = event_bus.sessions.get(session_id)
     if not sess:
         print(f"⚠️ Unknown session_id: {session_id}")
         await websocket.close(code=1008, reason="Unknown session")
         return
-    
+
     print(f"✅ Recall bot connected for session {session_id}")
     sess["logs"].append("Recall bot connected")
     await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
+
     # Start clip processing timer
     async def clip_timer():
         while True:
             await asyncio.sleep(1.0)
             check_and_create_clips(session_id)
-    
+
     clip_task = asyncio.create_task(clip_timer())
-    
+
     try:
         while True:
             message = await websocket.receive_text()
-            
+
             try:
                 msg = json.loads(message)
             except json.JSONDecodeError:
                 continue
-            
+
             evt_type = msg.get("event")
             payload = (msg.get("data") or {}).get("data") or {}
             participant = payload.get("participant", {})
             speaker = participant.get("name") or f"ID-{participant.get('id')}"
             ts_now = time.time()
-            
+
             # Create unique key for this session+speaker
             participant_key = f"{session_id}_{speaker}"
-            
+
             # Handle different event types
             if evt_type == "video_separate_png.data":
                 buf_b64 = payload.get("buffer")
                 if buf_b64:
-                    participant_data[participant_key]["frames"].append((buf_b64, ts_now))
-            
+                    participant_data[participant_key]["frames"].append(
+                        (buf_b64, ts_now)
+                    )
+
             elif evt_type == "audio_separate_raw.data":
                 buf_b64 = payload.get("buffer", "")
-                rel_ts  = payload.get("timestamp", {}).get("relative")
+                rel_ts = payload.get("timestamp", {}).get("relative")
 
                 if buf_b64 and rel_ts is not None:
                     pcm_bytes = base64.b64decode(buf_b64)
@@ -603,7 +658,9 @@ async def fastapi_handler(websocket: WebSocket):
 
                     # Gap fill exactly like in test.py
                     if data["last_audio_ts"] is not None:
-                        expected_samples = int((rel_ts - data["last_audio_ts"]) * AUDIO_RATE)
+                        expected_samples = int(
+                            (rel_ts - data["last_audio_ts"]) * AUDIO_RATE
+                        )
                         gap = expected_samples - (len(pcm_bytes) // SAMPLE_WIDTH)
                         if gap > 0:
                             data["audio_buffer"].extend(b"\x00" * gap * SAMPLE_WIDTH)
@@ -611,34 +668,35 @@ async def fastapi_handler(websocket: WebSocket):
                     data["audio_buffer"].extend(pcm_bytes)
                     data["last_audio_ts"] = rel_ts
 
-            
             elif evt_type in ["transcript.data", "transcript.partial_data"]:
                 words = [w.get("text", "") for w in payload.get("words", [])]
                 text = " ".join(words).strip()
-                
+
                 if text:
                     is_partial = evt_type == "transcript.partial_data"
                     log_entry = f"Transcript {speaker}{'(partial)' if is_partial else ''}: {text[:150]}"
                     sess["logs"].append(log_entry)
-                    
+
                     # Only emit non-partial transcripts
                     if not is_partial:
                         print(f"📝 {speaker}: {text}")
                         await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
+
     except Exception as e:
         print(f"❌ WebSocket error: {e}")
         sess["logs"].append(f"WebSocket error: {str(e)}")
         await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
+
     finally:
         clip_task.cancel()
-        
+
         # Cleanup participant data for this session
         session_prefix = f"{session_id}_"
-        keys_to_remove = [k for k in participant_data.keys() if k.startswith(session_prefix)]
+        keys_to_remove = [
+            k for k in participant_data.keys() if k.startswith(session_prefix)
+        ]
         for key in keys_to_remove:
             del participant_data[key]
-        
+
         print(f"🔌 WebSocket disconnected for session {session_id}")
         await websocket.close()
