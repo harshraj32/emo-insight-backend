@@ -96,7 +96,7 @@ async def join_session(sid, data):
     logger.info(f"Available sessions: {list(sessions.keys())}")
     
     if session_id in sessions:
-        await sio.enter_room(sid, session_id)
+        sio.enter_room(sid, session_id)
         logs = sessions[session_id].get("logs", [])[-10:]
         await sio.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
         logger.info(f"🔗 Client {sid} joined session {session_id}")
