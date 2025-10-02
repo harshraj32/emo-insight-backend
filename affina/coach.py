@@ -86,7 +86,7 @@ Meeting Context:
 - Phase: {context.get("phase")}
 - Objective: {context.get("objective")}
 - Sales Rep: {sales_rep_name}
-
+- Emotions to Monitor: {', '.join(context.get("emotions", []))}
 SALES REP ({rep_summary['speaker'] if rep_summary else 'Unknown'}):
 Current State: {json.dumps(rep_summary.get('data', {}) if rep_summary else {}, indent=2)}
 Emotion Trail: {trails_summary.get(rep_summary['speaker'] if rep_summary else '', 'No history')}

@@ -195,6 +195,20 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
             summaries[clean_speaker] = summary[clean_speaker]
             print(f"🎉 Summary created for {clean_speaker}")
             print(f"Summary: {summaries}")
+
+
+            audio_data = summary[clean_speaker].get("audio", {})
+            if audio_data.get("status") == "ok":
+                transcript_text = audio_data.get("transcript", "").strip()
+                if transcript_text:
+                    storage_utils.save_transcript_line(
+                        session_id,
+                        clean_speaker,
+                        ts_str,
+                        transcript_text
+                    )
+                    print(f"📝 Saved transcript for {clean_speaker}: {transcript_text[:100]}...")
+                    
         except Exception as e:
             summaries[clean_speaker] = {
                 "audio": {"status": "error", "error": str(e)},
@@ -541,30 +555,6 @@ async def fastapi_handler(websocket: WebSocket):
                     data["audio_buffer"].extend(pcm_bytes)
                     data["last_audio_ts"] = rel_ts
             
-            elif evt_type in ["transcript.data", "transcript.partial_data"]:
-                words = [w.get("text", "") for w in payload.get("words", [])]
-                text = " ".join(words).strip()
-                
-                if text:
-                    is_partial = evt_type == "transcript.partial_data"
-                    
-                    # Save non-partial transcripts to disk
-                    if not is_partial:
-                        import storage
-                        storage.save_transcript_line(
-                            session_id, 
-                            speaker, 
-                            datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), 
-                            text
-                        )
-                        print(f"📝 {speaker}: {text}")
-                    
-                    log_entry = f"{'[Partial] ' if is_partial else ''}{speaker}: {text[:150]}"
-                    sess["logs"].append(log_entry)
-                    
-                    if not is_partial:
-                        await event_bus.emit_log(session_id, sess["logs"][-10:])
-    
     except Exception as e:
         print(f"❌ WebSocket error: {e}")
         sess["logs"].append(f"WebSocket error: {str(e)}")
