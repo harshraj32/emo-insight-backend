@@ -71,10 +71,19 @@ async def _emit_log(session_id: str, logs: list):
     await sio.emit("log_update", {"session_id": session_id, "logs": logs}, room=session_id)
     logger.info(f"📢 Emitted logs to session {session_id}: {len(logs)} logs")
 
+
+async def _emit_emotions_batch(session_id: str, participants: list):
+    await sio.emit("emotions_batch", {
+        "session_id": session_id, 
+        "participants": participants
+    }, room=session_id)
+    logger.info(f"📢 Emitted {len(participants)} emotions to session {session_id}")
+
+
 event_bus.emit_advice = _emit_advice
 event_bus.emit_emotion = _emit_emotion
 event_bus.emit_log = _emit_log
-
+event_bus.emit_emotions_batch = _emit_emotions_batch
 # ===== WebSocket route for Recall.ai =====
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

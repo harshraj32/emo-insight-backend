@@ -4,6 +4,7 @@ from typing import Awaitable, Callable, Dict, Any
 emit_advice: Callable[[str, str], Awaitable[None]] = lambda *_: None  # async
 emit_emotion: Callable[[Dict[str, Any]], Awaitable[None]] = lambda *_: None  # async
 emit_log: Callable[[str, list], Awaitable[None]] = lambda *_: None  # async
+emit_emotions_batch: Callable[[str, list], Awaitable[None]] = lambda *_: None
 
 # Shared in-memory sessions store
 # sessions[session_id] = {

@@ -321,7 +321,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
     try:
         sess = event_bus.sessions.get(session_id)
         if not sess:
-            print(f"⚠️ Session {session_id} not found for Affina processing")
+            logger.warning(f"⚠️ Session {session_id} not found for Affina processing")
             return
 
         sales_rep_name = sess.get("user_name", "Rep")
@@ -339,7 +339,10 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         if time_since_coach >= 20:  # Force coach every 20 seconds
             should_trigger_coach = True
-            print(f"[DEBUG] 20 seconds elapsed, forcing coach call")
+            logger.debug(f"20 seconds elapsed, forcing coach call")
+
+        # Collect all emotions for batch emission
+        batch_emotions = []
 
         for speaker, summary in summaries.items():
             # Save emotion trail to disk
@@ -349,7 +352,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             last_state = storage_utils.get_last_emotion_state(session_id, speaker)
             if storage_utils.has_emotion_changed(last_state, summary, threshold=0.1):
                 should_trigger_coach = True
-                print(f"[DEBUG] Emotion changed for {speaker}, triggering coach")
+                logger.debug(f"Emotion changed for {speaker}, triggering coach")
 
             # Identify role
             if sales_rep_name.lower() in speaker.lower():
@@ -357,12 +360,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             else:
                 customer_summaries[speaker] = summary
 
-        print(
-            f"[DEBUG] Identified - Rep: {rep_summary['speaker'] if rep_summary else 'Not found'}, Customers: {list(customer_summaries.keys())}"
-        )
-
-        # Emit emotion events for each speaker
-        for speaker, summary in summaries.items():
+            # Build emotion data for batch
             audio_data = summary.get("audio", {})
             video_data = summary.get("video", {})
 
@@ -375,16 +373,24 @@ async def process_affina_feedback(session_id, summaries, ts_str):
                     video_emotions if video_emotions else audio_emotions
                 )
 
-                emotion_data = {
-                    "session_id": session_id,
+                batch_emotions.append({
                     "speaker": speaker,
                     "timestamp": ts_str,
                     "audio": audio_data,
                     "video": video_data,
                     "is_sales_rep": sales_rep_name.lower() in speaker.lower(),
                     "blended_label": blended_label,
-                }
-                await event_bus.emit_emotion(emotion_data)
+                })
+
+        logger.debug(
+            f"Identified - Rep: {rep_summary['speaker'] if rep_summary else 'Not found'}, "
+            f"Customers: {list(customer_summaries.keys())}"
+        )
+
+        # Emit all emotions in one batch
+        if batch_emotions:
+            await event_bus.emit_emotions_batch(session_id, batch_emotions)
+            logger.info(f"📊 Sent batch of {len(batch_emotions)} emotions to frontend")
 
         # Get recent transcript from disk (last 20 lines)
         recent_transcript_data = storage_utils.get_recent_transcript(session_id, limit=20)
@@ -397,7 +403,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         # Only call coach if emotions changed OR 20 seconds passed
         if not should_trigger_coach:
-            print(f"[DEBUG] Emotions stable for {session_id}, skipping coach call")
+            logger.debug(f"Emotions stable for {session_id}, skipping coach call")
             return
 
         # Update last coach time
@@ -422,7 +428,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         # Get coach feedback
         feedback = coach_feedback(context, recent_transcript)
-        print(f"[DEBUG] Coach feedback received: {feedback}")
+        logger.debug(f"Coach feedback received: {feedback}")
 
         # Emit advice
         if isinstance(feedback, dict):
@@ -440,9 +446,8 @@ async def process_affina_feedback(session_id, summaries, ts_str):
         await event_bus.emit_log(session_id, sess["logs"][-10:])
 
     except Exception as e:
-        print(f"❌ Error in Affina processing: {e}")
+        logger.error(f"❌ Error in Affina processing: {e}")
         import traceback
-
         traceback.print_exc()
         try:
             await event_bus.emit_advice(
@@ -450,6 +455,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             )
         except:
             pass
+
 
 async def fastapi_handler(websocket: WebSocket):
     """
