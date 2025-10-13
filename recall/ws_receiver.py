@@ -329,7 +329,9 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             sess.get("objective", ""),
             sess.get("phase", "pitch")
         )
-
+        logger.info(
+                        f"objective of the sales guy is {sess.get("objective")} and the name is {sales_rep_name} "
+                    )
         # Update context metadata if changed
         ctx.update_metadata(
             phase=sess.get("phase"),
