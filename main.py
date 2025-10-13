@@ -162,6 +162,8 @@ async def start_session(payload: Dict[str, Any] = Body(...)):
         "logs": [],
         "recent_events": [],
         "last_hume_summary": {},
+        "last_coach_time": 0,
+        "last_coach_feedback": None,
     }
 
     try:

@@ -93,6 +93,94 @@ def get_recent_transcript(session_id: str, limit: int = 20) -> list:
     
     return recent
 
+# ===== NEW METHODS FOR TIME-BASED QUERIES =====
+
+def get_transcript_in_timerange(session_id: str, start_time: float, end_time: float) -> list:
+    """
+    Get transcript entries within a specific time range.
+    
+    Args:
+        session_id: Session identifier
+        start_time: Unix timestamp (start of range)
+        end_time: Unix timestamp (end of range)
+    
+    Returns:
+        List of transcript entries in the time range
+    """
+    session_dir = STORAGE_DIR / session_id
+    transcript_file = session_dir / "transcript.jsonl"
+    
+    if not transcript_file.exists():
+        return []
+    
+    results = []
+    with open(transcript_file, "r") as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+                entry_time = datetime.fromisoformat(entry['datetime']).timestamp()
+                
+                if start_time <= entry_time <= end_time:
+                    results.append(entry)
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+    
+    return results
+
+def get_emotions_in_timerange(session_id: str, speaker: str, start_time: float, end_time: float) -> list:
+    """
+    Get emotion entries for a speaker within a specific time range.
+    
+    Args:
+        session_id: Session identifier
+        speaker: Speaker name
+        start_time: Unix timestamp (start of range)
+        end_time: Unix timestamp (end of range)
+    
+    Returns:
+        List of emotion entries in the time range
+    """
+    session_dir = STORAGE_DIR / session_id
+    trail_file = session_dir / f"{speaker}_emotions.jsonl"
+    
+    if not trail_file.exists():
+        return []
+    
+    results = []
+    with open(trail_file, "r") as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+                entry_time = datetime.fromisoformat(entry['datetime']).timestamp()
+                
+                if start_time <= entry_time <= end_time:
+                    results.append(entry)
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+    
+    return results
+
+def get_all_speakers(session_id: str) -> list:
+    """
+    Get list of all speakers in a session.
+    
+    Returns:
+        List of speaker names
+    """
+    session_dir = STORAGE_DIR / session_id
+    
+    if not session_dir.exists():
+        return []
+    
+    speakers = []
+    for emotion_file in session_dir.glob("*_emotions.jsonl"):
+        speaker = emotion_file.stem.replace("_emotions", "")
+        speakers.append(speaker)
+    
+    return speakers
+
+# ===== ORIGINAL METHODS (KEEP AS IS) =====
+
 def get_last_emotion_state(session_id: str, speaker: str) -> dict:
     """
     Get the most recent emotion state for comparison.

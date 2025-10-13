@@ -1,104 +1,181 @@
 import os
 import json
 import re
+import logging
 from openai import OpenAI
 
+logger = logging.getLogger(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# Use the enhanced coaching prompt from document 4
 AFFINA_PROMPT = """
-You are Affina, a sales coach providing real-time guidance to sales reps during live calls.
+You are **Affina**, a sharp, emotionally intelligent sales buddy and real-time conversation analyst.  
+You've studied every leading book, framework, and insight on **sales psychology, human behavior, emotional intelligence, and persuasive communication**.  
+You instinctively understand tone, pacing, trust, curiosity, and subtle shifts in engagement.  
+You listen like a human, think like a strategist, and speak like a teammate who's been on hundreds of successful sales calls.  
 
-Analyze:
-1. SALES REP's emotions and delivery
-2. CUSTOMER's reactions and engagement  
-3. Conversation flow and emotion trails over time
+Your mission:  
+Help the **sales rep** understand what's really happening between them and the customer — emotionally and conversationally — and guide them toward achieving their **sales objective**.  
+You never give robotic or generic advice. You observe, interpret, and respond like a real coach sitting beside the rep in the call — grounded, calm, insightful.
 
-CRITICAL: Coach ONLY the sales rep on what to do based on customer reactions.
+---
 
-### Emotion Interpretation
-When emotions are close (within 0.05-0.07):
-- Don't force a single label
-- Describe as blended: "slight boredom with calm focus"
-- Acknowledge nuance
+### 🧩 INPUTS
+You will receive:
+- The **stage** of the call (Pleasantries, Pitch, Q&A, or Closing)
+- The **sales objective**
+- **Historical summary** of conversation so far (compressed)
+- The **current 2-minute window** (raw transcript + emotions)
+- **Latest analysis** from the conversation analyzer
+- The **customer's emotion summary**
+- The **sales rep's emotion summary**
 
-### Stage-Specific Coaching
+---
 
-**Pleasantries**: Voice warmth, energy, rapport building
-**Pitch**: Focus on customer reactions (face + voice)
-  - Confused → "Slow down and clarify"
-  - Bored → "Add story or ask question"
-  - Interested → "Keep this energy"
-**Q&A**: Check if answers land well
-**Closing**: Guide on when to push vs back off
+### 🎯 OUTPUT STYLE
+When giving advice, always respond with **one cohesive, human-sounding paragraph** (1–3 sentences max).  
+Your advice must naturally blend emotional understanding with practical direction.
 
-### Output Format
+Structure your thinking as follows:
+
+1️⃣ **Emotion Insight (start with a short, vivid observation)**  
+   Describe what the customer feels and why, using natural language — not analytical labels.  
+   Examples:  
+   - "He's processing quietly."  
+   - "He's poking holes, not doubting you."  
+   - "He's mentally scrolling emails."  
+   - "He's holding back, waiting to see if you'll overpitch."  
+
+2️⃣ **Contextual Coaching (follow up with deep, situation-aware guidance)**  
+   Analyze how the sales rep's approach and the customer's reaction connect to the rep's **objective** and the **stage** of the meeting.  
+   - If the rep's delivery is strong but rushed → suggest slowing to let interest mature.  
+   - If the rep is doing fine but the customer is disengaged → show how to re-engage attention smoothly.  
+   - If the customer is probing → help the rep acknowledge and pivot confidently.  
+   - If the rep is unclear → suggest one crisp communication fix that restores clarity.  
+   - If both are aligned → guide the rep to transition toward the next micro-goal or call stage.  
+
+   For scenarios not explicitly mentioned, infer the most human and effective response possible — draw from your deep understanding of **conversation psychology, rapport dynamics, and sales communication theory**.  
+   You can creatively adapt tone and strategy to fit the flow.  
+
+---
+
+### 🧭 HOW YOU THINK
+1. Interpret emotion signals and transcript meaning holistically.  
+   Don't just classify — understand *why* they feel that way and *how it affects progress*.  
+2. Adjust your guidance based on the **meeting stage**:  
+   - **Pleasantries** → comfort, warmth, rapport.  
+   - **Pitch** → clarity, engagement, pacing, story.  
+   - **Q&A** → listening, validation, confidence.  
+   - **Closing** → conviction, commitment, ease.  
+3. Always tie advice back to the **sales objective** — help the rep move one clear step closer to it.  
+4. Sound human and emotionally precise — never preach, repeat, or fill space.  
+
+---
+
+### 💬 STYLE RULES
+- Tone: modern, grounded, supportive — confident but never robotic.  
+- No clichés like "be positive" or "speak warmly." Say *what to do*, not *how to feel*.  
+- Avoid overexplaining — concise, sharp insights that make the rep *instantly understand the moment.*  
+- Handle any unfamiliar or unexpected conversational scenario gracefully — you've seen every kind of human behavior; improvise intelligently.  
+- Keep it realistic, conversational, and emotionally attuned.  
+- You are a trusted ally, not a critic.  
+
+---
+
+### 📦 OUTPUT FORMAT
+Always return JSON:
 {
-  "stage": "Pleasantries|Pitch|Q&A|Closing",
-  "sales_rep_state": "brief emotional state description",
-  "customer_state": "brief reaction description",
-  "emotion_trend": "stable|improving|declining",
-  "recommendation": "1-2 actionable sentences"
+  "feedback": "Your concise, actionable advice here (1-3 sentences)"
 }
-
-Output ONLY valid JSON, no markdown.
 """
 
-def coach_feedback(context: dict, transcript: str) -> dict:
+
+def coach_feedback_with_context(coaching_context: dict) -> dict:
     """
-    Provide coaching with emotion trails and conversation history.
+    Provide coaching using structured context from context manager.
+    
+    Args:
+        coaching_context: Dict from context_manager.prepare_coaching_context()
+            Contains:
+            - conversation_history: Compressed summary of prior conversation
+            - current_window: Raw transcript and emotions from last 2 mins
+            - latest_analysis: Analysis from summarizer
+            - phase, objective, sales_rep_name
+    
+    Returns:
+        Dict with feedback
     """
     
-    sales_rep_name = context.get("sales_rep_name", "Rep")
-    rep_summary = context.get("rep_summary")
-    customer_summaries = context.get("customer_summaries", {})
-    emotion_trails = context.get("emotion_trails", {})
-
+    ctx = coaching_context
+    current = ctx.get('current_window', {})
+    analysis = ctx.get('latest_analysis', {})
+    
     # Check for valid data
-    has_valid_data = False
+    has_data = bool(current.get('transcript', '').strip())
     
-    if rep_summary and rep_summary.get("data"):
-        rep_data = rep_summary["data"]
-        if rep_data.get("audio", {}).get("top_emotions") or rep_data.get("video", {}).get("top_emotions"):
-            has_valid_data = True
-    
-    for speaker, summary in customer_summaries.items():
-        if summary.get("audio", {}).get("top_emotions") or summary.get("video", {}).get("top_emotions"):
-            has_valid_data = True
-            break
-    
-    if not has_valid_data:
+    if not has_data:
         return {
-            "stage": context.get("phase", "Pleasantries").title(),
-            "sales_rep_state": "No data",
-            "customer_state": "No data",
-            "emotion_trend": "unknown",
-            "recommendation": "Waiting for emotion data. Ensure cameras/mics are on."
+            "feedback": "Waiting for conversation data. Ensure participants are speaking and cameras/mics are on."
         }
-
-    # Format emotion trails for context
-    trails_summary = {}
-    for speaker, trail in emotion_trails.items():
-        if trail:
-            trails_summary[speaker] = f"Last {len(trail)} states tracked"
-
+    
+    # Format customer emotions for prompt
+    customer_emotions_summary = []
+    for name, emotions in current.get('customer_emotions', {}).items():
+        if emotions:
+            latest = emotions[-1]
+            audio = latest.get('audio_emotions', [])
+            video = latest.get('video_emotions', [])
+            
+            emo_str = f"{name}: "
+            if audio:
+                emo_str += f"Voice({audio[0]['name']} {audio[0]['score']:.2f}) "
+            if video:
+                emo_str += f"Face({video[0]['name']} {video[0]['score']:.2f})"
+            customer_emotions_summary.append(emo_str)
+    
+    # Format rep emotions
+    rep_emotions_summary = ""
+    rep_emotions = current.get('rep_emotions', [])
+    if rep_emotions:
+        latest = rep_emotions[-1]
+        audio = latest.get('audio_emotions', [])
+        video = latest.get('video_emotions', [])
+        
+        if audio:
+            rep_emotions_summary += f"Voice({audio[0]['name']} {audio[0]['score']:.2f}) "
+        if video:
+            rep_emotions_summary += f"Face({video[0]['name']} {video[0]['score']:.2f})"
+    
     user_prompt = f"""
-Meeting Context:
-- Phase: {context.get("phase")}
-- Objective: {context.get("objective")}
-- Sales Rep: {sales_rep_name}
-- Emotions to Monitor: {', '.join(context.get("emotions", []))}
-SALES REP ({rep_summary['speaker'] if rep_summary else 'Unknown'}):
-Current State: {json.dumps(rep_summary.get('data', {}) if rep_summary else {}, indent=2)}
-Emotion Trail: {trails_summary.get(rep_summary['speaker'] if rep_summary else '', 'No history')}
+=== MEETING CONTEXT ===
+Sales Rep: {ctx.get('sales_rep_name', 'Rep')}
+Objective: {ctx.get('objective', 'Close the deal')}
+Stage: {ctx.get('phase', 'Pitch')}
 
-CUSTOMERS:
-{json.dumps({k: {"current": v, "trail": trails_summary.get(k, 'No history')} for k, v in customer_summaries.items()}, indent=2)}
+=== CONVERSATION HISTORY (Summary) ===
+{ctx.get('conversation_history', '[Meeting just started]')}
 
-Recent Conversation (last 20 exchanges):
-{transcript}
+=== CURRENT WINDOW (Last 2 Minutes - RAW DATA) ===
+Transcript:
+{current.get('transcript', '[No conversation]')}
 
-Provide coaching for {sales_rep_name} based on customer reactions and emotion trends.
-Output ONLY JSON, no markdown.
+Sales Rep Emotions:
+{rep_emotions_summary or '[No data]'}
+
+Customer Emotions:
+{chr(10).join(customer_emotions_summary) if customer_emotions_summary else '[No data]'}
+
+=== ANALYZER ASSESSMENT ===
+Summary: {analysis.get('summary', 'Processing')}
+Dynamics: {analysis.get('dynamics', 'Processing')}
+Stage Assessment: {analysis.get('stage_assessment', ctx.get('phase', 'Unknown'))}
+Coaching Reason: {analysis.get('coaching_reason', 'Real-time monitoring')}
+
+---
+
+Based on this context, provide actionable coaching for {ctx.get('sales_rep_name', 'the rep')}.
+Focus on what they should do RIGHT NOW based on customer reactions.
+Output ONLY JSON with "feedback" field.
 """
 
     try:
@@ -108,8 +185,8 @@ Output ONLY JSON, no markdown.
                 {"role": "system", "content": AFFINA_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.6,
-            max_tokens=350,
+            temperature=0.7,
+            max_tokens=200,  # Keep advice concise
         )
 
         content = response.choices[0].message.content.strip()
@@ -124,39 +201,52 @@ Output ONLY JSON, no markdown.
         
         try:
             result = json.loads(content)
-            if "recommendation" not in result:
-                result["recommendation"] = "Keep engaging naturally."
+            if "feedback" not in result:
+                result["feedback"] = "Keep engaging naturally."
             return result
         except json.JSONDecodeError as e:
-            print(f"[DEBUG] JSON parse failed: {e}")
-            print(f"[DEBUG] Raw: {content[:500]}")
+            logger.error(f"[COACH] JSON parse failed: {e}")
+            logger.debug(f"[COACH] Raw: {content[:500]}")
             
-            if "recommendation" in content:
-                match = re.search(r'"recommendation"\s*:\s*"([^"]*)"', content)
+            # Try to extract feedback from raw text
+            if "feedback" in content:
+                match = re.search(r'"feedback"\s*:\s*"([^"]*)"', content)
                 if match:
-                    return {
-                        "recommendation": match.group(1),
-                        "stage": context.get("phase", "Unknown"),
-                        "sales_rep_state": "Processing",
-                        "customer_state": "Processing",
-                        "emotion_trend": "unknown"
-                    }
+                    return {"feedback": match.group(1)}
             
-            return {
-                "recommendation": "Keep the conversation flowing.",
-                "stage": context.get("phase", "Unknown"),
-                "sales_rep_state": "Processing",
-                "customer_state": "Processing",
-                "emotion_trend": "unknown"
-            }
+            return {"feedback": "Keep the conversation flowing naturally."}
             
     except Exception as e:
-        print(f"[DEBUG] Coach error: {e}")
+        logger.error(f"[COACH] Error: {e}")
         return {
-            "recommendation": "Focus on your meeting objective.",
-            "stage": context.get("phase", "Unknown"),
-            "sales_rep_state": "Error",
-            "customer_state": "Error",
-            "emotion_trend": "unknown",
+            "feedback": "Focus on your meeting objective.",
             "error": str(e)
         }
+
+
+# Legacy function for backward compatibility
+def coach_feedback(context: dict, transcript: str) -> dict:
+    """
+    Legacy coaching function. 
+    Converts old format to new context format.
+    """
+    logger.warning("[COACH] Using legacy coach_feedback. Consider migrating to coach_feedback_with_context.")
+    
+    # Convert to new format
+    coaching_context = {
+        'phase': context.get('phase', 'Pitch'),
+        'objective': context.get('objective', 'Close the deal'),
+        'sales_rep_name': context.get('sales_rep_name', 'Rep'),
+        'conversation_history': '[Legacy mode - no history]',
+        'current_window': {
+            'transcript': transcript,
+            'rep_emotions': [],
+            'customer_emotions': {}
+        },
+        'latest_analysis': {
+            'summary': 'Legacy analysis',
+            'coaching_reason': 'Real-time monitoring'
+        }
+    }
+    
+    return coach_feedback_with_context(coaching_context)

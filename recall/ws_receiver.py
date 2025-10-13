@@ -12,7 +12,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 import event_bus
-from affina.coach import coach_feedback
+from affina.coach import coach_feedback_with_context
+from affina import context_manager
 from config import settings
 from config import storage_utils
 from fastapi import WebSocket
@@ -116,18 +117,18 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                             Path(audio_clip_path),
                             models={"prosody": {"granularity": "utterance"}},
                         )
-                        print(
+                        logger.debug(
                             f"✅ Audio processed for {clean_speaker}: {os.path.getsize(audio_clip_path)} bytes"
                         )
 
                         if isinstance(audio_results, list):
                             audio_results = audio_results[0]
                     else:
-                        print(f"⚠️ Empty audio file for {clean_speaker}")
+                        logger.warning(f"⚠️ Empty audio file for {clean_speaker}")
                 except subprocess.CalledProcessError as e:
-                    print(f"❌ FFmpeg audio failed for {clean_speaker}: {e.stderr}")
+                    logger.error(f"❌ FFmpeg audio failed for {clean_speaker}: {e.stderr}")
                 except Exception as e:
-                    print(f"❌ Audio processing error for {clean_speaker}: {e}")
+                    logger.error(f"❌ Audio processing error for {clean_speaker}: {e}")
 
             # Process video if frames available
             frame_count = 0
@@ -171,20 +172,20 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                             Path(video_clip_path),
                             models={"face": {"fps_pred": 3}},
                         )
-                        print(
+                        logger.debug(
                             f"✅ Video processed for {clean_speaker}: {frame_count} frames"
                         )
 
                         if isinstance(video_results, list):
                             video_results = video_results[0]
                     else:
-                        print(f"⚠️ Empty video file for {clean_speaker}")
+                        logger.warning(f"⚠️ Empty video file for {clean_speaker}")
                 except subprocess.CalledProcessError as e:
-                    print(f"❌ FFmpeg video failed for {clean_speaker}: {e.stderr}")
+                    logger.error(f"❌ FFmpeg video failed for {clean_speaker}: {e.stderr}")
                 except Exception as e:
-                    print(f"❌ Video processing error for {clean_speaker}: {e}")
+                    logger.error(f"❌ Video processing error for {clean_speaker}: {e}")
 
-            # 👉 NEW: build unified summary
+            # Build unified summary
             summary = summarize_hume_batch(
                 audio_obj=audio_results,
                 video_obj=video_results,
@@ -193,10 +194,9 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
             )
 
             summaries[clean_speaker] = summary[clean_speaker]
-            print(f"🎉 Summary created for {clean_speaker}")
-            print(f"Summary: {summaries}")
+            logger.debug(f"🎉 Summary created for {clean_speaker}")
 
-
+            # Save transcript to disk
             audio_data = summary[clean_speaker].get("audio", {})
             if audio_data.get("status") == "ok":
                 transcript_text = audio_data.get("transcript", "").strip()
@@ -207,7 +207,7 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                         ts_str,
                         transcript_text
                     )
-                    print(f"📝 Saved transcript for {clean_speaker}: {transcript_text[:100]}...")
+                    logger.debug(f"📝 Saved transcript for {clean_speaker}: {transcript_text[:100]}...")
                     
         except Exception as e:
             summaries[clean_speaker] = {
@@ -215,7 +215,7 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
                 "video": {"status": "error", "error": str(e)},
                 "timestamp": ts_str,
             }
-            print(f"❌ Error processing {clean_speaker}: {e}")
+            logger.error(f"❌ Error processing {clean_speaker}: {e}")
 
         finally:
             if os.path.exists(temp_dir):
@@ -264,7 +264,7 @@ def check_and_create_clips(session_id):
                     "frames": list(relevant_frames),
                     "audio_buffer": bytes(data["audio_buffer"]),
                 }
-                print(
+                logger.debug(
                     f"📊 Queuing {speaker}: {len(relevant_frames)} frames, {len(data['audio_buffer'])} audio bytes"
                 )
 
@@ -276,7 +276,7 @@ def check_and_create_clips(session_id):
 
     # Process clips if we have any
     if participants_to_process:
-        print(f"🎬 Processing clips for {len(participants_to_process)} participants")
+        logger.info(f"🎬 Processing clips for {len(participants_to_process)} participants")
 
         # Run clip creation in executor
         loop = asyncio.get_running_loop()
@@ -297,26 +297,22 @@ def check_and_create_clips(session_id):
             try:
                 summaries, ts_str = await future
                 if summaries:
-                    print(
+                    logger.info(
                         f"🎯 Got summaries for {len(summaries)} participants at {ts_str}"
                     )
                     await process_affina_feedback(session_id, summaries, ts_str)
             except Exception as e:
-                print(f"❌ Error processing clips: {e}")
+                logger.error(f"❌ Error processing clips: {e}")
                 import traceback
-
                 traceback.print_exc()
 
         asyncio.create_task(process_results())
 
 
-import storage  # Add this import at the top
-
-
 async def process_affina_feedback(session_id, summaries, ts_str):
     """
-    Send summaries to Affina coach and emit results.
-    Triggers on emotion change OR every 20 seconds.
+    Process emotion/transcript data and feed to context manager.
+    Context manager decides when to call coach.
     """
     try:
         sess = event_bus.sessions.get(session_id)
@@ -326,46 +322,54 @@ async def process_affina_feedback(session_id, summaries, ts_str):
 
         sales_rep_name = sess.get("user_name", "Rep")
 
-        # Separate sales rep from customers
-        rep_summary = None
-        customer_summaries = {}
+        # Get or create context for this session
+        ctx = context_manager.get_or_create_context(
+            session_id,
+            sales_rep_name,
+            sess.get("objective", ""),
+            sess.get("phase", "pitch")
+        )
 
-        # Check for emotion changes and save trails
-        should_trigger_coach = False
+        # Update context metadata if changed
+        ctx.update_metadata(
+            phase=sess.get("phase"),
+            objective=sess.get("objective")
+        )
 
-        # Check time since last coach call
-        last_coach_time = sess.get("last_coach_time", 0)
-        time_since_coach = time.time() - last_coach_time
-
-        if time_since_coach >= 20:  # Force coach every 20 seconds
-            should_trigger_coach = True
-            logger.debug(f"20 seconds elapsed, forcing coach call")
-
-        # Collect all emotions for batch emission
-        batch_emotions = []
-
+        # Add new data to context rolling windows
         for speaker, summary in summaries.items():
-            # Save emotion trail to disk
+            # Save emotion trail to disk (already done in storage_utils)
             storage_utils.save_emotion_trail(session_id, speaker, ts_str, summary)
+            
+            # Add to context manager's rolling window
+            emotion_entry = {
+                "timestamp": ts_str,
+                "datetime": datetime.datetime.now().isoformat(),
+                "audio_emotions": summary.get("audio", {}).get("top_emotions", []),
+                "video_emotions": summary.get("video", {}).get("top_emotions", []),
+            }
+            ctx.add_emotion_entry(speaker, emotion_entry)
+            
+            # Add transcript to context if available
+            audio_data = summary.get("audio", {})
+            if audio_data.get("status") == "ok":
+                transcript_text = audio_data.get("transcript", "").strip()
+                if transcript_text:
+                    transcript_entry = {
+                        "timestamp": ts_str,
+                        "datetime": datetime.datetime.now().isoformat(),
+                        "speaker": speaker,
+                        "text": transcript_text,
+                    }
+                    ctx.add_transcript_entry(transcript_entry)
 
-            # Check if emotions changed
-            last_state = storage_utils.get_last_emotion_state(session_id, speaker)
-            if storage_utils.has_emotion_changed(last_state, summary, threshold=0.1):
-                should_trigger_coach = True
-                logger.debug(f"Emotion changed for {speaker}, triggering coach")
-
-            # Identify role
-            if sales_rep_name.lower() in speaker.lower():
-                rep_summary = {"speaker": speaker, "data": summary}
-            else:
-                customer_summaries[speaker] = summary
-
-            # Build emotion data for batch
+        # Collect all emotions for batch emission to frontend
+        batch_emotions = []
+        for speaker, summary in summaries.items():
             audio_data = summary.get("audio", {})
             video_data = summary.get("video", {})
 
             if audio_data.get("status") == "ok" or video_data.get("status") == "ok":
-                # Get blended emotion label
                 audio_emotions = audio_data.get("top_emotions", [])
                 video_emotions = video_data.get("top_emotions", [])
 
@@ -382,68 +386,40 @@ async def process_affina_feedback(session_id, summaries, ts_str):
                     "blended_label": blended_label,
                 })
 
-        logger.debug(
-            f"Identified - Rep: {rep_summary['speaker'] if rep_summary else 'Not found'}, "
-            f"Customers: {list(customer_summaries.keys())}"
-        )
-
-        # Emit all emotions in one batch
+        # Emit emotions to frontend
         if batch_emotions:
             await event_bus.emit_emotions_batch(session_id, batch_emotions)
             logger.info(f"📊 Sent batch of {len(batch_emotions)} emotions to frontend")
 
-        # Get recent transcript from disk (last 20 lines)
-        recent_transcript_data = storage_utils.get_recent_transcript(session_id, limit=20)
-        recent_transcript = "\n".join(
-            [f"{entry['speaker']}: {entry['text']}" for entry in recent_transcript_data]
-        )
+        # Check if context manager wants to provide coaching
+        coaching_context = await context_manager.process_context_updates(session_id)
+        
+        if coaching_context and coaching_context.get('coaching_ready'):
+            logger.info(f"🎯 Context manager triggered coaching for {session_id}")
+            
+            # Get feedback from coach
+            feedback = coach_feedback_with_context(coaching_context)
+            logger.debug(f"Coach feedback received: {feedback}")
 
-        if not recent_transcript:
-            recent_transcript = "[No recent conversation]"
+            # Extract advice message
+            if isinstance(feedback, dict):
+                advice_message = feedback.get("feedback", "Processing.")
+            else:
+                advice_message = str(feedback)
 
-        # Only call coach if emotions changed OR 20 seconds passed
-        if not should_trigger_coach:
-            logger.debug(f"Emotions stable for {session_id}, skipping coach call")
-            return
+            # Emit advice to frontend
+            await event_bus.emit_advice(session_id, advice_message)
 
-        # Update last coach time
-        sess["last_coach_time"] = time.time()
-
-        # Get emotion trails for context
-        emotion_context = {}
-        for speaker in summaries.keys():
-            trail = storage_utils.get_recent_emotion_trail(session_id, speaker, limit=5)
-            emotion_context[speaker] = trail
-
-        # Prepare context for coach
-        context = {
-            "phase": sess.get("phase", "pitch"),
-            "objective": sess.get("objective", ""),
-            "emotions": sess.get("emotions", []),
-            "sales_rep_name": sales_rep_name,
-            "rep_summary": rep_summary,
-            "customer_summaries": customer_summaries,
-            "emotion_trails": emotion_context,  # Historical context
-        }
-
-        # Get coach feedback
-        feedback = coach_feedback(context, recent_transcript)
-        logger.debug(f"Coach feedback received: {feedback}")
-
-        # Emit advice
-        if isinstance(feedback, dict):
-            advice_message = feedback.get("recommendation", "Processing.")
+            # Update session logs
+            sess["logs"].append(f"[{ts_str}] 🎯 Provided coaching advice")
+            sess["last_coach_feedback"] = feedback
+            
+            await event_bus.emit_log(session_id, sess["logs"][-10:])
         else:
-            advice_message = str(feedback)
+            logger.debug(f"Context not ready for coaching: {session_id}")
 
-        await event_bus.emit_advice(session_id, advice_message)
-
-        # Update session logs
-        sess["logs"].append(f"[{ts_str}] Analyzed {len(summaries)} speakers")
+        # Update session state
         sess["last_hume_summary"] = summaries
-        sess["last_coach_feedback"] = feedback
-
-        await event_bus.emit_log(session_id, sess["logs"][-10:])
 
     except Exception as e:
         logger.error(f"❌ Error in Affina processing: {e}")
@@ -467,19 +443,28 @@ async def fastapi_handler(websocket: WebSocket):
     session_id = websocket.query_params.get("session_id")
     
     if not session_id:
-        print("⚠️ WebSocket connected without session_id")
+        logger.warning("⚠️ WebSocket connected without session_id")
         await websocket.close(code=1008, reason="Missing session_id")
         return
     
     sess = event_bus.sessions.get(session_id)
     if not sess:
-        print(f"⚠️ Unknown session_id: {session_id}")
+        logger.warning(f"⚠️ Unknown session_id: {session_id}")
         await websocket.close(code=1008, reason="Unknown session")
         return
     
-    print(f"✅ Recall bot WebSocket connected for session {session_id}")
+    logger.info(f"✅ Recall bot WebSocket connected for session {session_id}")
     sess["logs"].append("Bot connected - waiting to join meeting...")
     await event_bus.emit_log(session_id, sess["logs"][-10:])
+    
+    # Initialize context manager for this session
+    sales_rep_name = sess.get("user_name", "Rep")
+    context_manager.get_or_create_context(
+        session_id,
+        sales_rep_name,
+        sess.get("objective", ""),
+        sess.get("phase", "pitch")
+    )
     
     # Start clip processing timer
     async def clip_timer():
@@ -562,7 +547,7 @@ async def fastapi_handler(websocket: WebSocket):
                     data["last_audio_ts"] = rel_ts
             
     except Exception as e:
-        print(f"❌ WebSocket error: {e}")
+        logger.error(f"❌ WebSocket error: {e}")
         sess["logs"].append(f"WebSocket error: {str(e)}")
         await event_bus.emit_log(session_id, sess["logs"][-10:])
     
@@ -575,5 +560,8 @@ async def fastapi_handler(websocket: WebSocket):
         for key in keys_to_remove:
             del participant_data[key]
         
-        print(f"🔌 WebSocket disconnected for session {session_id}")
+        # Cleanup context manager
+        context_manager.remove_context(session_id)
+        
+        logger.info(f"🔌 WebSocket disconnected for session {session_id}")
         await websocket.close()
