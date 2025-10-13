@@ -158,7 +158,7 @@ Output ONLY JSON.
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Using mini for cost efficiency
+            model="gpt-4o",  # Using mini for cost efficiency
             messages=[
                 {"role": "system", "content": SUMMARIZER_PROMPT},
                 {"role": "user", "content": user_prompt},
