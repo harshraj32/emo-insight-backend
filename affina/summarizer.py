@@ -19,6 +19,8 @@ that help the coach provide timely, relevant advice.
 ### Your Tasks:
 
 1. **Summarize the 2-minute window**:
+   - ONLY summarize what was ACTUALLY said in clear, understandable language
+   - If transcript is garbled/incomplete, say "Transcript quality is poor" - DO NOT invent interpretations
    - Key points discussed
    - Emotional shifts for each participant
    - Communication dynamics (pacing, engagement, rapport)
@@ -26,7 +28,7 @@ that help the coach provide timely, relevant advice.
 2. **Assess coaching readiness**:
    - Is there enough context to give meaningful advice?
    - Are there clear signals the sales rep needs guidance?
-   - Should we wait for more information?
+   - Should we wait for more information in the next 5-second update?
 
 3. **Identify critical moments**:
    - Customer confusion, disengagement, or concern
@@ -34,25 +36,50 @@ that help the coach provide timely, relevant advice.
    - Transition points between stages
    - Opportunities to advance the sale
 
-### Coaching Readiness Criteria:
-- **YES** if: Clear customer reaction to pitch, obvious engagement shift, rep struggling, 
-  critical objection, or closing opportunity
-- **NO** if: Just pleasantries, unclear context, need more conversation, or nothing actionable
+### CRITICAL: Be Accurate, Not Interpretive
+- DO NOT call garbled text "technical jargon" - call it "unclear/garbled transcript"
+- DO NOT invent meaning from incomplete sentences
+- DO NOT assume intent when transcript is poor quality
+- If you can't understand what was said, acknowledge that explicitly
+
+### Coaching Readiness Criteria (BE STRICT):
+- **YES** if ALL of these are true:
+  1. At least 6-8 complete, clear transcript lines (not garbled)
+  2. At least 3-4 back-and-forth exchanges between rep and customer
+  3. Clear customer question or reaction about the product
+  4. Rep has attempted to pitch or explain something substantial
+  5. Transcript quality is good (not full of errors or "unable to transcribe")
+  6. Clear coaching opportunity exists
+
+- **NO** if ANY of these are true:
+  - Just greetings or pleasantries ("Hey", "How's it going", "What's up")
+  - Garbled, incomplete, or low-confidence transcript
+  - Less than 6 clear transcript lines
+  - Less than 3 back-and-forth exchanges
+  - No clear pitch or substantive product discussion yet
+  - Unclear context - need to wait for next update cycle
+  - Nothing specific to coach on yet
+
+### Special Rules:
+- If transcript has multiple "unable to transcribe" errors, automatically say NO
+- If transcript is mostly fragments or single words, say NO
+- If both parties just exchanged greetings, say NO - wait for actual discussion
+- Better to wait 5-10 more seconds than give premature advice
 
 ### Output Format:
 {
-  "summary": "2-3 sentence summary of this window",
+  "summary": "Brief factual summary - acknowledge if transcript is poor",
   "key_emotions": {
     "sales_rep": "dominant emotion with trend",
     "customers": {"Name": "emotion + engagement level"}
   },
-  "dynamics": "1 sentence on conversation flow/rapport",
+  "dynamics": "1 sentence on actual conversation quality and flow",
   "coaching_ready": true/false,
-  "coaching_reason": "why advice is/isn't needed now",
-  "stage_assessment": "which stage this feels like: Pleasantries|Pitch|Q&A|Closing"
+  "coaching_reason": "specific reason - be honest about data quality",
+  "stage_assessment": "Pleasantries|Pitch|Q&A|Closing"
 }
 
-Output ONLY valid JSON.
+Output ONLY valid JSON. Be conservative - when in doubt, say NO and wait for better data.
 """
 
 
@@ -131,7 +158,7 @@ Output ONLY JSON.
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",  # Using mini for cost efficiency
+            model="gpt-4o-mini",  # Using mini for cost efficiency
             messages=[
                 {"role": "system", "content": SUMMARIZER_PROMPT},
                 {"role": "user", "content": user_prompt},
