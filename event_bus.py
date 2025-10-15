@@ -20,3 +20,7 @@ emit_emotions_batch: Callable[[str, list], Awaitable[None]] = lambda *_: None
 #   "last_hume_summary": dict
 # }
 sessions: Dict[str, Dict[str, Any]] = {}
+async def emit_partial_transcript(session_id: str, speaker: str, text: str):
+    """Emit partial transcript for live captions (optional)"""
+    # This will be wired in main.py to Socket.IO
+    pass

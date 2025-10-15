@@ -196,19 +196,7 @@ def create_clips_for_all_sync(session_id, participants_data, start, end):
             summaries[clean_speaker] = summary[clean_speaker]
             logger.debug(f"🎉 Summary created for {clean_speaker}")
 
-            # Save transcript to disk
-            audio_data = summary[clean_speaker].get("audio", {})
-            if audio_data.get("status") == "ok":
-                transcript_text = audio_data.get("transcript", "").strip()
-                if transcript_text:
-                    storage_utils.save_transcript_line(
-                        session_id,
-                        clean_speaker,
-                        ts_str,
-                        transcript_text
-                    )
-                    logger.debug(f"📝 Saved transcript for {clean_speaker}: {transcript_text[:100]}...")
-                    
+            # Save transcript to disk        
         except Exception as e:
             summaries[clean_speaker] = {
                 "audio": {"status": "error", "error": str(e)},
@@ -352,19 +340,7 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             }
             ctx.add_emotion_entry(speaker, emotion_entry)
             
-            # Add transcript to context if available
-            audio_data = summary.get("audio", {})
-            if audio_data.get("status") == "ok":
-                transcript_text = audio_data.get("transcript", "").strip()
-                if transcript_text:
-                    transcript_entry = {
-                        "timestamp": ts_str,
-                        "datetime": datetime.datetime.now().isoformat(),
-                        "speaker": speaker,
-                        "text": transcript_text,
-                    }
-                    ctx.add_transcript_entry(transcript_entry)
-
+        
         # Collect all emotions for batch emission to frontend
         batch_emotions = []
         for speaker, summary in summaries.items():
@@ -435,11 +411,9 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             pass
 
 
+
 async def fastapi_handler(websocket: WebSocket):
-    """
-    Handle WebSocket connection from Recall bot.
-    Receives real-time participant events and media data.
-    """
+    """Handle WebSocket connection from Recall bot."""
     await websocket.accept()
     
     session_id = websocket.query_params.get("session_id")
@@ -459,9 +433,9 @@ async def fastapi_handler(websocket: WebSocket):
     sess["logs"].append("Bot connected - waiting to join meeting...")
     await event_bus.emit_log(session_id, sess["logs"][-10:])
     
-    # Initialize context manager for this session
+    # Initialize context manager
     sales_rep_name = sess.get("user_name", "Rep")
-    context_manager.get_or_create_context(
+    ctx = context_manager.get_or_create_context(
         session_id,
         sales_rep_name,
         sess.get("objective", ""),
@@ -489,14 +463,66 @@ async def fastapi_handler(websocket: WebSocket):
             data_wrapper = msg.get("data", {})
             payload = data_wrapper.get("data", {})
             
+            # ===== NEW: Handle Transcript Events =====
+            if evt_type == "transcript.data":
+                participant = payload.get("participant", {})
+                speaker = participant.get("name") or f"ID-{participant.get('id')}"
+                
+                # Get the transcript text
+                transcript_text = payload.get("text", "").strip()
+                
+                if transcript_text:
+                    # Generate timestamp
+                    ts_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                    
+                    # Save to disk immediately
+                    storage_utils.save_transcript_line(
+                        session_id,
+                        speaker,
+                        ts_str,
+                        transcript_text
+                    )
+                    
+                    # Add to context manager
+                    transcript_entry = {
+                        "timestamp": ts_str,
+                        "datetime": datetime.datetime.now().isoformat(),
+                        "speaker": speaker,
+                        "text": transcript_text,
+                    }
+                    ctx.add_transcript_entry(transcript_entry)
+                    
+                    # Log to session
+                    sess["logs"].append(f"[{ts_str}] {speaker}: {transcript_text[:80]}...")
+                    await event_bus.emit_log(session_id, sess["logs"][-10:])
+                    
+                    logger.info(f"📝 Transcript from {speaker}: {transcript_text}")
+            
+            # ===== Handle Partial Transcripts (Optional - for real-time display) =====
+            elif evt_type == "transcript.partial_data":
+                participant = payload.get("participant", {})
+                speaker = participant.get("name") or f"ID-{participant.get('id')}"
+                partial_text = payload.get("text", "").strip()
+                
+                if partial_text:
+                    # Just log, don't save yet (not final)
+                    logger.debug(f"🎤 {speaker} (partial): {partial_text}")
+                    
+                    # Optional: emit to frontend for live captions
+                    await event_bus.emit_partial_transcript(
+                        session_id, 
+                        speaker, 
+                        partial_text
+                    )
+            
             # ===== Handle Participant Events =====
-            if evt_type == "participant_events.join":
+            elif evt_type == "participant_events.join":
                 participant = payload.get("participant", {})
                 name = participant.get("name", "Unknown")
                 is_host = participant.get("is_host", False)
                 
                 if is_host:
-                    sess["logs"].append(f"✅ Host {name} joined - bot admitted to meeting!")
+                    sess["logs"].append(f"✅ Host {name} joined - bot admitted!")
                 else:
                     sess["logs"].append(f"👤 {name} joined the meeting")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
@@ -513,13 +539,7 @@ async def fastapi_handler(websocket: WebSocket):
                 sess["logs"].append(f"🎤 {name} started speaking")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
             
-            elif evt_type == "participant_events.webcam_on":
-                participant = payload.get("participant", {})
-                name = participant.get("name", "Unknown")
-                sess["logs"].append(f"📹 {name} turned on camera")
-                await event_bus.emit_log(session_id, sess["logs"][-10:])
-            
-            # ===== Handle Media Data Events =====
+            # ===== Handle Media Data Events (Keep for emotions) =====
             participant = payload.get("participant", {})
             speaker = participant.get("name") or f"ID-{participant.get('id')}"
             ts_now = time.time()
@@ -556,13 +576,12 @@ async def fastapi_handler(websocket: WebSocket):
     finally:
         clip_task.cancel()
         
-        # Cleanup participant data
+        # Cleanup
         session_prefix = f"{session_id}_"
         keys_to_remove = [k for k in participant_data.keys() if k.startswith(session_prefix)]
         for key in keys_to_remove:
             del participant_data[key]
         
-        # Cleanup context manager
         context_manager.remove_context(session_id)
         
         logger.info(f"🔌 WebSocket disconnected for session {session_id}")

@@ -42,7 +42,9 @@ def start_bot(meeting_url: str, session_id: str):
             "video_separate_png": {},
             "audio_separate_raw": {},
             "transcript": {
-                "provider": {"recallai_streaming": {}},
+                "provider": {"recallai_streaming": {
+                    "mode": "prioritize_low_latency",
+                }},
                 "diarization": {"use_separate_streams_when_available": True},
             },
             "realtime_endpoints": [
@@ -55,7 +57,6 @@ def start_bot(meeting_url: str, session_id: str):
                         "audio_separate_raw.data",
                         "transcript.data",
                         "transcript.partial_data",
-                        # Participant events (ONLY these are allowed for real-time endpoints)
                         "participant_events.join",
                         "participant_events.leave",
                         "participant_events.speech_on",

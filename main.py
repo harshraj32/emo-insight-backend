@@ -80,6 +80,14 @@ async def _emit_emotions_batch(session_id: str, participants: list):
     logger.info(f"📢 Emitted {len(participants)} emotions to session {session_id}")
 
 
+async def _emit_partial_transcript(session_id: str, speaker: str, text: str):
+    await sio.emit("partial_transcript", {
+        "session_id": session_id,
+        "speaker": speaker, 
+        "text": text
+    }, room=session_id)
+
+event_bus.emit_partial_transcript = _emit_partial_transcript
 event_bus.emit_advice = _emit_advice
 event_bus.emit_emotion = _emit_emotion
 event_bus.emit_log = _emit_log
