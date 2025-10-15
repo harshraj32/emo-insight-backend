@@ -411,7 +411,6 @@ async def process_affina_feedback(session_id, summaries, ts_str):
             pass
 
 
-
 async def fastapi_handler(websocket: WebSocket):
     """Handle WebSocket connection from Recall bot."""
     await websocket.accept()
@@ -463,57 +462,62 @@ async def fastapi_handler(websocket: WebSocket):
             data_wrapper = msg.get("data", {})
             payload = data_wrapper.get("data", {})
             
-            # ===== NEW: Handle Transcript Events =====
+            # Debug logging for transcript events
+            if evt_type and "transcript" in evt_type:
+                logger.info(f"🎙️ TRANSCRIPT EVENT RECEIVED: {evt_type}")
+                logger.debug(f"🎙️ Full payload: {json.dumps(payload, indent=2)[:500]}")
+            
+            # ===== Handle Transcript Events =====
             if evt_type == "transcript.data":
                 participant = payload.get("participant", {})
                 speaker = participant.get("name") or f"ID-{participant.get('id')}"
                 
-                # Get the transcript text
-                transcript_text = payload.get("text", "").strip()
+                # Extract text from words array
+                words = payload.get("words", [])
                 
-                if transcript_text:
-                    # Generate timestamp
-                    ts_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                if words:
+                    # Combine all words into one text string
+                    transcript_text = " ".join([word.get("text", "") for word in words]).strip()
                     
-                    # Save to disk immediately
-                    storage_utils.save_transcript_line(
-                        session_id,
-                        speaker,
-                        ts_str,
-                        transcript_text
-                    )
-                    
-                    # Add to context manager
-                    transcript_entry = {
-                        "timestamp": ts_str,
-                        "datetime": datetime.datetime.now().isoformat(),
-                        "speaker": speaker,
-                        "text": transcript_text,
-                    }
-                    ctx.add_transcript_entry(transcript_entry)
-                    
-                    # Log to session
-                    sess["logs"].append(f"[{ts_str}] {speaker}: {transcript_text[:80]}...")
-                    await event_bus.emit_log(session_id, sess["logs"][-10:])
-                    
-                    logger.info(f"📝 Transcript from {speaker}: {transcript_text}")
+                    if transcript_text:
+                        # Generate timestamp
+                        ts_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                        
+                        logger.info(f"📝 Transcript from {speaker}: {transcript_text}")
+                        
+                        # Save to disk immediately
+                        storage_utils.save_transcript_line(
+                            session_id,
+                            speaker,
+                            ts_str,
+                            transcript_text
+                        )
+                        
+                        # Add to context manager
+                        transcript_entry = {
+                            "timestamp": ts_str,
+                            "datetime": datetime.datetime.now().isoformat(),
+                            "speaker": speaker,
+                            "text": transcript_text,
+                        }
+                        ctx.add_transcript_entry(transcript_entry)
+                        
+                        # Log to session (show in frontend)
+                        sess["logs"].append(f"💬 {speaker}: {transcript_text}")
+                        await event_bus.emit_log(session_id, sess["logs"][-10:])
             
-            # ===== Handle Partial Transcripts (Optional - for real-time display) =====
+            # ===== Handle Partial Transcripts (Optional - for live captions) =====
             elif evt_type == "transcript.partial_data":
                 participant = payload.get("participant", {})
                 speaker = participant.get("name") or f"ID-{participant.get('id')}"
-                partial_text = payload.get("text", "").strip()
                 
-                if partial_text:
-                    # Just log, don't save yet (not final)
-                    logger.debug(f"🎤 {speaker} (partial): {partial_text}")
+                words = payload.get("words", [])
+                
+                if words:
+                    partial_text = " ".join([word.get("text", "") for word in words]).strip()
                     
-                    # Optional: emit to frontend for live captions
-                    await event_bus.emit_partial_transcript(
-                        session_id, 
-                        speaker, 
-                        partial_text
-                    )
+                    if partial_text:
+                        logger.debug(f"🎤 {speaker} (speaking): {partial_text[:50]}...")
             
             # ===== Handle Participant Events =====
             elif evt_type == "participant_events.join":
@@ -537,6 +541,12 @@ async def fastapi_handler(websocket: WebSocket):
                 participant = payload.get("participant", {})
                 name = participant.get("name", "Unknown")
                 sess["logs"].append(f"🎤 {name} started speaking")
+                await event_bus.emit_log(session_id, sess["logs"][-10:])
+            
+            elif evt_type == "participant_events.webcam_on":
+                participant = payload.get("participant", {})
+                name = participant.get("name", "Unknown")
+                sess["logs"].append(f"📹 {name} turned on camera")
                 await event_bus.emit_log(session_id, sess["logs"][-10:])
             
             # ===== Handle Media Data Events (Keep for emotions) =====
@@ -570,18 +580,21 @@ async def fastapi_handler(websocket: WebSocket):
             
     except Exception as e:
         logger.error(f"❌ WebSocket error: {e}")
+        import traceback
+        traceback.print_exc()
         sess["logs"].append(f"WebSocket error: {str(e)}")
         await event_bus.emit_log(session_id, sess["logs"][-10:])
     
     finally:
         clip_task.cancel()
         
-        # Cleanup
+        # Cleanup participant data
         session_prefix = f"{session_id}_"
         keys_to_remove = [k for k in participant_data.keys() if k.startswith(session_prefix)]
         for key in keys_to_remove:
             del participant_data[key]
         
+        # Cleanup context manager
         context_manager.remove_context(session_id)
         
         logger.info(f"🔌 WebSocket disconnected for session {session_id}")

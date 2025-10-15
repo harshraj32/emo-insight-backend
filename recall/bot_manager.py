@@ -53,7 +53,6 @@ def start_bot(meeting_url: str, session_id: str):
                     "type": "websocket",
                     "url": ws_url,
                     "events": [
-                        # Media data events
                         "video_separate_png.data",
                         "audio_separate_raw.data",
                         "transcript.data",
