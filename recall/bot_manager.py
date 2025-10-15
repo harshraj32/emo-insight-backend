@@ -44,6 +44,7 @@ def start_bot(meeting_url: str, session_id: str):
             "transcript": {
                 "provider": {"recallai_streaming": {
                     "mode": "prioritize_low_latency",
+                    "language_code": "en"
                 }},
                 "diarization": {"use_separate_streams_when_available": True},
             },
