@@ -205,6 +205,10 @@ def coach_feedback_with_context(coaching_context: dict) -> dict:
 CONTEXT:
 Rep: {ctx.get('sales_rep_name', 'Rep')} | Objective: {ctx.get('objective', 'Close deal')} | Stage: {ctx.get('phase', 'Pitch')}
 
+CUMULATIVE SUMMARY:
+{ctx.get('cumulative_summary', '[No previous context]')}
+
+
 {facts_str}
 
 RECENT TRANSCRIPT:

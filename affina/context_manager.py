@@ -184,6 +184,7 @@ class SessionContext:
             
             # Historical context (compressed)
             'conversation_history': historical_summary,
+            'cumulative_summary': historical_summary,
             'previous_summaries_count': len(self.summaries) - 1 if self.summaries else 0,
             
             # Current window (raw)
