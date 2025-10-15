@@ -25,12 +25,21 @@ that help the coach provide timely, relevant advice.
    - Emotional shifts for each participant
    - Communication dynamics (pacing, engagement, rapport)
 
-2. **Assess coaching readiness**:
+2. **Extract key facts mentioned** (NEW):
+   - What specific facts did the customer reveal? (timeline, business status, pain points, budget signals)
+   - DO NOT assume facts that weren't explicitly stated
+   - Examples: 
+     * "Customer mentioned opening in Spring 2026"
+     * "Customer has 3 locations currently"
+     * "Customer expressed concern about labor costs"
+   - If no specific facts mentioned, leave array empty
+
+3. **Assess coaching readiness**:
    - Is there enough context to give meaningful advice?
    - Are there clear signals the sales rep needs guidance?
    - Should we wait for more information in the next 5-second update?
 
-3. **Identify critical moments**:
+4. **Identify critical moments**:
    - Customer confusion, disengagement, or concern
    - Sales rep struggling or missing cues
    - Transition points between stages
@@ -41,6 +50,30 @@ that help the coach provide timely, relevant advice.
 - DO NOT invent meaning from incomplete sentences
 - DO NOT assume intent when transcript is poor quality
 - If you can't understand what was said, acknowledge that explicitly
+- DO NOT assume customer has current operations unless they explicitly mention it
+- DO NOT assume timeline unless customer explicitly states it
+
+### Context Clues to Watch For:
+
+When extracting facts, listen for these signals:
+
+**Business Status Signals:**
+- "We currently have...", "Our restaurant...", "Our kitchen..." → existing business
+- "Planning to open...", "Will be opening...", "In the future..." → prospective/planning
+- "Just researching...", "Just curious...", "Exploring options..." → early research stage
+
+**Timeline Signals:**
+- "Next week/month", "Right now", "Immediately" → immediate need
+- "In a few months", "This quarter" → near-term
+- "Next year", "In a year or so", "Eventually" → long-term
+- No timeline mentioned → mark as unknown
+
+**Qualification Signals:**
+- "Need to check with...", "Need approval..." → not sole decision maker
+- "I'm the owner", "I make decisions..." → decision maker
+- "Comparing options", "Looking at alternatives..." → competitive evaluation
+
+**Only include these in key_facts_mentioned if they were EXPLICITLY stated.**
 
 ### Coaching Readiness Criteria (BE STRICT):
 - **YES** if ALL of these are true:
@@ -69,6 +102,7 @@ that help the coach provide timely, relevant advice.
 ### Output Format:
 {
   "summary": "Brief factual summary - acknowledge if transcript is poor",
+  "key_facts_mentioned": ["fact1", "fact2", "fact3"],
   "key_emotions": {
     "sales_rep": "dominant emotion with trend",
     "customers": {"Name": "emotion + engagement level"}
@@ -78,6 +112,9 @@ that help the coach provide timely, relevant advice.
   "coaching_reason": "specific reason - be honest about data quality",
   "stage_assessment": "Pleasantries|Pitch|Q&A|Closing"
 }
+
+**CRITICAL:** Only include facts in key_facts_mentioned that were EXPLICITLY stated in the conversation.
+If nothing specific was mentioned, use an empty array [].
 
 Output ONLY valid JSON. Be conservative - when in doubt, say NO and wait for better data.
 """
@@ -124,14 +161,12 @@ def summarize_window(
             emotions_text += f"\n{speaker}:\n"
             if audio_emo:
                 try:
-                    # Build emotion string separately to avoid f-string issues
                     emo_strs = [f"{e.get('name', 'Unknown')}({e.get('score', 0):.2f})" for e in audio_emo[:3]]
                     emotions_text += f"  Voice: {', '.join(emo_strs)}\n"
                 except Exception as e:
                     emotions_text += f"  Voice: [Error formatting: {str(e)}]\n"
             if video_emo:
                 try:
-                    # Build emotion string separately to avoid f-string issues
                     emo_strs = [f"{e.get('name', 'Unknown')}({e.get('score', 0):.2f})" for e in video_emo[:3]]
                     emotions_text += f"  Face: {', '.join(emo_strs)}\n"
                 except Exception as e:
@@ -153,18 +188,19 @@ Meeting Context:
 {emotions_text}
 
 Analyze this window and determine if the coach should provide advice now.
+Extract key facts that were EXPLICITLY mentioned - do not assume.
 Output ONLY JSON.
 """
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",  # Using mini for cost efficiency
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": SUMMARIZER_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,  # Lower temp for consistent analysis
-            max_tokens=400,
+            temperature=0.3,
+            max_tokens=500,  # Increased slightly for key_facts
         )
 
         content = response.choices[0].message.content.strip()
@@ -185,15 +221,19 @@ Output ONLY JSON.
             if field not in result:
                 result[field] = "Processing" if field != "coaching_ready" else False
         
+        # Ensure key_facts_mentioned exists
+        if "key_facts_mentioned" not in result:
+            result["key_facts_mentioned"] = []
+        
         return result
         
     except json.JSONDecodeError as e:
         print(f"[SUMMARIZER] JSON parse error: {e}")
         print(f"[SUMMARIZER] Raw content: {content[:300]}")
         
-        # Return safe fallback
         return {
             "summary": "Unable to parse analysis",
+            "key_facts_mentioned": [],
             "key_emotions": {},
             "dynamics": "Processing",
             "coaching_ready": False,
@@ -205,6 +245,7 @@ Output ONLY JSON.
         print(f"[SUMMARIZER] Error: {e}")
         return {
             "summary": f"Error: {str(e)}",
+            "key_facts_mentioned": [],
             "key_emotions": {},
             "dynamics": "Error",
             "coaching_ready": False,
@@ -226,12 +267,28 @@ def create_cumulative_summary(previous_summaries: list) -> str:
     if not previous_summaries:
         return "[Meeting just started]"
     
-    # Simple concatenation for now - could be LLM-enhanced later
-    summary_parts = []
+    # Collect key facts from all summaries
+    all_facts = []
+    for summ in previous_summaries:
+        facts = summ.get('key_facts_mentioned', [])
+        all_facts.extend(facts)
     
-    for i, summ in enumerate(previous_summaries[-5:]):  # Last 5 windows max
+    # Deduplicate while preserving order
+    unique_facts = list(dict.fromkeys(all_facts))
+    
+    # Create stage progression summary
+    summary_parts = []
+    for summ in previous_summaries[-5:]:  # Last 5 windows max
         stage = summ.get('stage_assessment', 'Unknown')
         text = summ.get('summary', '')
         summary_parts.append(f"[{stage}] {text}")
     
-    return " → ".join(summary_parts)
+    progression = " → ".join(summary_parts)
+    
+    # Add discovered facts if any
+    if unique_facts:
+        facts_summary = " | Key facts: " + ", ".join(unique_facts[:5])
+    else:
+        facts_summary = ""
+    
+    return progression + facts_summary

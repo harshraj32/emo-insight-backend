@@ -462,11 +462,6 @@ async def fastapi_handler(websocket: WebSocket):
             data_wrapper = msg.get("data", {})
             payload = data_wrapper.get("data", {})
             
-            # Debug logging for transcript events
-            if evt_type and "transcript" in evt_type:
-                logger.info(f"🎙️ TRANSCRIPT EVENT RECEIVED: {evt_type}")
-                logger.debug(f"🎙️ Full payload: {json.dumps(payload, indent=2)[:500]}")
-            
             # ===== Handle Transcript Events =====
             if evt_type == "transcript.data":
                 participant = payload.get("participant", {})
@@ -506,19 +501,7 @@ async def fastapi_handler(websocket: WebSocket):
                         sess["logs"].append(f"💬 {speaker}: {transcript_text}")
                         await event_bus.emit_log(session_id, sess["logs"][-10:])
             
-            # ===== Handle Partial Transcripts (Optional - for live captions) =====
-            elif evt_type == "transcript.partial_data":
-                participant = payload.get("participant", {})
-                speaker = participant.get("name") or f"ID-{participant.get('id')}"
-                
-                words = payload.get("words", [])
-                
-                if words:
-                    partial_text = " ".join([word.get("text", "") for word in words]).strip()
-                    
-                    if partial_text:
-                        logger.debug(f"🎤 {speaker} (speaking): {partial_text[:50]}...")
-            
+
             # ===== Handle Participant Events =====
             elif evt_type == "participant_events.join":
                 participant = payload.get("participant", {})
